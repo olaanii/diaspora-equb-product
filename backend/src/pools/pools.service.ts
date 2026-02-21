@@ -1,0 +1,944 @@
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Pool } from '../entities/pool.entity';
+import { PoolMember } from '../entities/pool-member.entity';
+import { Contribution } from '../entities/contribution.entity';
+import { PayoutStreamEntity } from '../entities/payout-stream.entity';
+import { ethers } from 'ethers';
+import { Web3Service, UnsignedTxDto } from '../web3/web3.service';
+
+@Injectable()
+export class PoolsService {
+  private readonly logger = new Logger(PoolsService.name);
+
+  constructor(
+    @InjectRepository(Pool)
+    private readonly poolRepo: Repository<Pool>,
+    @InjectRepository(PoolMember)
+    private readonly memberRepo: Repository<PoolMember>,
+    @InjectRepository(Contribution)
+    private readonly contributionRepo: Repository<Contribution>,
+    @InjectRepository(PayoutStreamEntity)
+    private readonly payoutStreamRepo: Repository<PayoutStreamEntity>,
+    private readonly web3Service: Web3Service,
+  ) {}
+
+  // ─── TX Builder Methods (return unsigned calldata for client-side signing) ───
+
+  /**
+   * Build unsigned TX to create a new Equb pool on-chain.
+   * The user signs this with their wallet via WalletConnect.
+   *
+   * @param token - ERC-20 token address for contributions.
+   *                Pass '0x0000000000000000000000000000000000000000' or undefined for native CTC.
+   */
+  async buildCreatePool(
+    tier: number,
+    contributionAmount: string,
+    maxMembers: number,
+    treasury: string,
+    token?: string,
+  ): Promise<UnsignedTxDto> {
+    const tokenAddress =
+      token || '0x0000000000000000000000000000000000000000';
+    this.logger.log(
+      `Building createPool TX: tier=${tier}, contribution=${contributionAmount}, maxMembers=${maxMembers}, token=${tokenAddress}`,
+    );
+
+    // Validate params that would cause contract revert (so user gets a clear error instead of failed tx)
+    const contributionBig = BigInt(contributionAmount);
+    if (contributionBig <= 0n) {
+      throw new BadRequestException(
+        'Invalid contribution: amount must be greater than 0 (contract: "invalid contribution")',
+      );
+    }
+    if (maxMembers <= 1) {
+      throw new BadRequestException(
+        'Invalid members: maxMembers must be greater than 1 (contract: "invalid members")',
+      );
+    }
+    const zeroAddr = '0x0000000000000000000000000000000000000000';
+    if (!treasury || treasury.toLowerCase() === zeroAddr.toLowerCase()) {
+      throw new BadRequestException(
+        'Invalid treasury: treasury address cannot be zero (contract: "invalid treasury")',
+      );
+    }
+
+    const tierRegistry = this.web3Service.getTierRegistry();
+    const config = await tierRegistry.tierConfig(tier);
+    if (!config.enabled) {
+      throw new BadRequestException(
+        `Tier ${tier} is disabled on-chain. The network admin must call configureTier to enable this tier (contract: "tier disabled")`,
+      );
+    }
+    const maxPoolSize = BigInt(config.maxPoolSize.toString());
+    if (contributionBig > maxPoolSize) {
+      throw new BadRequestException(
+        `Contribution amount (${contributionAmount}) exceeds tier ${tier} max pool size (${config.maxPoolSize}) (contract: "pool size exceeds tier")`,
+      );
+    }
+
+    const equbPool = this.web3Service.getEqubPool();
+    const wantsTokenPool = tokenAddress.toLowerCase() != zeroAddr.toLowerCase();
+    const v2Sig = 'createPool(uint8,uint256,uint256,address,address)';
+    const legacySig = 'createPool(uint8,uint256,uint256,address)';
+    const v2Selector = ethers.id(v2Sig).slice(2, 10).toLowerCase();
+    const equbPoolAddress = await equbPool.getAddress();
+    const code = (
+      await this.web3Service.getProvider().getCode(equbPoolAddress)
+    ).toLowerCase();
+    const supportsV2 = code.includes(v2Selector);
+
+    let data: string;
+    if (supportsV2) {
+      data = equbPool.interface.encodeFunctionData(
+        v2Sig,
+        [tier, contributionAmount, maxMembers, treasury, tokenAddress],
+      );
+    } else {
+      if (wantsTokenPool) {
+        throw new BadRequestException(
+          `Deployed EQUB_POOL_ADDRESS (${equbPoolAddress}) is a legacy EqubPool and does not support token pools (missing createPool(uint8,uint256,uint256,address,address)). Redeploy v2 EqubPool and update EQUB_POOL_ADDRESS.`,
+        );
+      }
+
+      this.logger.warn(
+        `Deployed EQUB_POOL_ADDRESS (${equbPoolAddress}) does not expose createPool(uint8,uint256,uint256,address,address); falling back to legacy createPool(uint8,uint256,uint256,address).`,
+      );
+      data = equbPool.interface.encodeFunctionData(
+        legacySig,
+        [tier, contributionAmount, maxMembers, treasury],
+      );
+    }
+    const to = equbPoolAddress;
+
+    return this.web3Service.buildUnsignedTx(to, data, '0', '500000');
+  }
+
+  /**
+   * Build unsigned TX to join an existing pool on-chain.
+   */
+  async buildJoinPool(
+    onChainPoolId: number,
+    caller?: string,
+  ): Promise<UnsignedTxDto> {
+    this.logger.log(`Building joinPool TX: poolId=${onChainPoolId}`);
+
+    if (caller) {
+      if (!ethers.isAddress(caller)) {
+        throw new BadRequestException('Invalid caller address');
+      }
+      const normalizedCaller = ethers.getAddress(caller);
+      const identityRegistry = this.web3Service.getIdentityRegistry();
+      const identity = await identityRegistry.identityOf(normalizedCaller);
+      if (identity === ethers.ZeroHash) {
+        throw new BadRequestException(
+          'Wallet identity is not bound on-chain. Complete wallet binding (store on-chain) before joining a pool.',
+        );
+      }
+    }
+
+    const equbPool = this.web3Service.getEqubPool();
+    const data = equbPool.interface.encodeFunctionData('joinPool', [
+      onChainPoolId,
+    ]);
+    const to = await equbPool.getAddress();
+
+    return this.web3Service.buildUnsignedTx(to, data, '0', '200000');
+  }
+
+  /**
+   * Build unsigned TX to contribute to a pool round on-chain.
+   *
+   * For native CTC pools: `value` equals the contribution amount.
+   * For ERC-20 pools: `value` is 0 (user must approve first via buildApproveToken).
+   *
+   * @param tokenAddress - If provided, this is an ERC-20 pool (value=0).
+   *                       Pass undefined or zero address for native CTC.
+   */
+  async buildContribute(
+    onChainPoolId: number,
+    contributionAmount: string,
+    tokenAddress?: string,
+  ): Promise<UnsignedTxDto> {
+    const zeroAddress = '0x0000000000000000000000000000000000000000';
+    let isErc20 = false;
+
+    const equbPool = this.web3Service.getEqubPool();
+    const equbPoolAddress = await equbPool.getAddress();
+    const code = (
+      await this.web3Service.getProvider().getCode(equbPoolAddress)
+    ).toLowerCase();
+    const poolTokenSelector = ethers
+      .id('poolToken(uint256)')
+      .slice(2, 10)
+      .toLowerCase();
+    const supportsPoolToken = code.includes(poolTokenSelector);
+
+    if (supportsPoolToken) {
+      try {
+        const onChainToken = await equbPool.poolToken(onChainPoolId);
+        isErc20 =
+          typeof onChainToken === 'string' &&
+          onChainToken.toLowerCase() !== zeroAddress.toLowerCase();
+      } catch (e) {
+        this.logger.warn(
+          `Could not read poolToken(${onChainPoolId}); falling back to native contribution mode: ${e}`,
+        );
+        isErc20 = false;
+      }
+    }
+
+    this.logger.log(
+      `Building contribute TX: poolId=${onChainPoolId}, amount=${contributionAmount}, erc20=${!!isErc20}`,
+    );
+
+    if (
+      !isErc20 &&
+      tokenAddress &&
+      tokenAddress.toLowerCase() !== zeroAddress.toLowerCase()
+    ) {
+      this.logger.warn(
+        `Frontend requested ERC-20 contribution for pool ${onChainPoolId}, but on-chain pool mode is native. Using native value amount.`,
+      );
+    }
+
+    const data = equbPool.interface.encodeFunctionData('contribute', [
+      onChainPoolId,
+    ]);
+    const to = equbPoolAddress;
+
+    // For ERC-20 pools, value is 0.
+    // For native pools, derive exact expected amount from createPool tx to avoid
+    // DB/display unit mismatches (e.g., "2.000000000000000000" vs on-chain 2 wei).
+    const value = isErc20
+      ? '0'
+      : await this.resolveNativeContributionValue(onChainPoolId, contributionAmount);
+
+    return this.web3Service.buildUnsignedTx(to, data, value, '200000');
+  }
+
+  private async resolveNativeContributionValue(
+    onChainPoolId: number,
+    fallbackContributionAmount: string,
+  ): Promise<string> {
+    const pool = await this.poolRepo.findOne({ where: { onChainPoolId } });
+    if (!pool?.txHash) {
+      return fallbackContributionAmount;
+    }
+
+    try {
+      const tx = await this.web3Service.getProvider().getTransaction(pool.txHash);
+      if (!tx?.data) {
+        return fallbackContributionAmount;
+      }
+
+      const equbPool = this.web3Service.getEqubPool();
+      const parsed = equbPool.interface.parseTransaction({ data: tx.data });
+      if (!parsed?.args || parsed.args.length < 2) {
+        return fallbackContributionAmount;
+      }
+
+      const amountArg = parsed.args[1];
+      const amount =
+        typeof amountArg === 'bigint'
+          ? amountArg.toString()
+          : String((amountArg as any)?.toString?.() ?? amountArg);
+
+      if (amount && /^\d+$/.test(amount)) {
+        return amount;
+      }
+
+      return fallbackContributionAmount;
+    } catch (e) {
+      this.logger.warn(
+        `Could not resolve native contribution amount from create tx for onChainPoolId=${onChainPoolId}: ${e}`,
+      );
+      return fallbackContributionAmount;
+    }
+  }
+
+  /**
+   * Build unsigned TX to approve the EqubPool contract to spend ERC-20 tokens.
+   * Must be signed and sent BEFORE contributing to an ERC-20 pool.
+   */
+  async buildApproveToken(
+    tokenAddress: string,
+    amount: string,
+  ): Promise<UnsignedTxDto> {
+    this.logger.log(
+      `Building approve TX: token=${tokenAddress}, amount=${amount}`,
+    );
+
+    const { ethers } = await import('ethers');
+    const erc20Iface = new ethers.Interface([
+      'function approve(address spender, uint256 amount) external returns (bool)',
+    ]);
+
+    const equbPool = this.web3Service.getEqubPool();
+    const equbPoolAddress = await equbPool.getAddress();
+
+    const data = erc20Iface.encodeFunctionData('approve', [
+      equbPoolAddress,
+      amount,
+    ]);
+
+    return this.web3Service.buildUnsignedTx(
+      tokenAddress,
+      data,
+      '0',
+      '60000',
+    );
+  }
+
+  /**
+   * Build unsigned TX to close a round on-chain.
+   */
+  async buildCloseRound(onChainPoolId: number): Promise<UnsignedTxDto> {
+    this.logger.log(`Building closeRound TX: poolId=${onChainPoolId}`);
+
+    const equbPool = this.web3Service.getEqubPool();
+    const data = equbPool.interface.encodeFunctionData('closeRound', [
+      onChainPoolId,
+    ]);
+    const to = await equbPool.getAddress();
+
+    return this.web3Service.buildUnsignedTx(to, data, '0', '500000');
+  }
+
+  /**
+   * Build unsigned TX to schedule a payout stream on-chain.
+   */
+  async buildScheduleStream(
+    onChainPoolId: number,
+    beneficiary: string,
+    total: string,
+    upfrontPercent: number,
+    totalRounds: number,
+  ): Promise<UnsignedTxDto> {
+    this.logger.log(
+      `Building schedulePayoutStream TX: poolId=${onChainPoolId}, beneficiary=${beneficiary}`,
+    );
+
+    const equbPool = this.web3Service.getEqubPool();
+    const data = equbPool.interface.encodeFunctionData(
+      'schedulePayoutStream',
+      [onChainPoolId, beneficiary, total, upfrontPercent, totalRounds],
+    );
+    const to = await equbPool.getAddress();
+
+    return this.web3Service.buildUnsignedTx(to, data, '0', '400000');
+  }
+
+  // ─── Read Methods (from DB cache, populated by Event Indexer) ───────────────
+
+  /** Backfill treasury and createdBy from createPool tx when missing. */
+  private async backfillPoolFromCreationTx(pool: Pool): Promise<void> {
+    if (!pool.txHash) return;
+    const zero = '0x0000000000000000000000000000000000000000';
+    const needsTreasury = pool.treasury === zero;
+    const needsCreatedBy = !pool.createdBy;
+    if (!needsTreasury && !needsCreatedBy) return;
+    try {
+      const provider = this.web3Service.getProvider();
+      const equbPool = this.web3Service.getEqubPool();
+      const tx = await provider.getTransaction(pool.txHash);
+      if (!tx) return;
+      let updated = false;
+      if (needsCreatedBy && tx.from) {
+        const { ethers } = await import('ethers');
+        pool.createdBy = ethers.getAddress(tx.from);
+        updated = true;
+        this.logger.log(`Backfilled createdBy for pool ${pool.id}: ${pool.createdBy}`);
+      }
+      if (needsTreasury && tx.data) {
+        const parsed = equbPool.interface.parseTransaction({ data: tx.data });
+        if (parsed?.args && parsed.args.length >= 4) {
+          const t = parsed.args[3];
+          const treasury =
+            typeof t === 'string' && t.startsWith('0x')
+              ? t
+              : String((t as any)?.toString?.() ?? t);
+          if (treasury && treasury !== zero) {
+            pool.treasury = treasury;
+            updated = true;
+            this.logger.log(`Backfilled treasury for pool ${pool.id}: ${treasury}`);
+          }
+        }
+      }
+      if (updated) await this.poolRepo.save(pool);
+    } catch (e) {
+      this.logger.warn(`Could not backfill pool ${pool.id} from tx: ${e}`);
+    }
+  }
+
+  async getPool(poolId: string) {
+    const pool = await this.poolRepo.findOne({
+      where: { id: poolId },
+      relations: ['members', 'contributions'],
+    });
+    if (!pool) {
+      throw new NotFoundException(`Pool ${poolId} not found`);
+    }
+    await this.backfillPoolFromCreationTx(pool);
+    // Return plain object so createdBy/treasury are never stripped by serialization
+    return { ...pool, createdBy: pool.createdBy ?? null };
+  }
+
+  /**
+   * Get the ERC-20 token info for a pool.
+   * Returns isErc20: true with token details for ERC-20 pools,
+   * or isErc20: false for native CTC pools.
+   */
+  async getPoolToken(poolId: string) {
+    const pool = await this.poolRepo.findOne({ where: { id: poolId } });
+    if (!pool) {
+      throw new NotFoundException(`Pool ${poolId} not found`);
+    }
+
+    const zeroAddress = '0x0000000000000000000000000000000000000000';
+    const isErc20 = pool.token && pool.token !== zeroAddress;
+
+    if (!isErc20) {
+      return {
+        poolId: pool.id,
+        isErc20: false,
+        token: null,
+        message: 'This pool uses native CTC for contributions',
+      };
+    }
+
+    // Try to read token metadata from on-chain
+    try {
+      const { ethers } = await import('ethers');
+      const erc20Abi = [
+        'function symbol() view returns (string)',
+        'function decimals() view returns (uint8)',
+        'function name() view returns (string)',
+      ];
+      const provider = this.web3Service.getProvider();
+      const tokenContract = new ethers.Contract(pool.token, erc20Abi, provider);
+
+      const [symbol, decimals, name] = await Promise.all([
+        tokenContract.symbol(),
+        tokenContract.decimals(),
+        tokenContract.name(),
+      ]);
+
+      return {
+        poolId: pool.id,
+        isErc20: true,
+        token: {
+          address: pool.token,
+          symbol,
+          decimals: Number(decimals),
+          name,
+        },
+      };
+    } catch {
+      return {
+        poolId: pool.id,
+        isErc20: true,
+        token: {
+          address: pool.token,
+          symbol: 'UNKNOWN',
+          decimals: 18,
+          name: 'Unknown Token',
+        },
+      };
+    }
+  }
+
+  async listPools(tier?: number) {
+    const tierNum =
+      tier !== null && tier !== undefined ? Number(tier) : undefined;
+    const where =
+      tierNum !== undefined && !isNaN(tierNum) ? { tier: tierNum } : {};
+    return this.poolRepo.find({
+      where,
+      relations: ['members'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  // ─── Legacy DB Methods (kept for dev/test; indexer replaces these in prod) ──
+
+  async createPool(
+    tier: number,
+    contributionAmount: string,
+    maxMembers: number,
+    treasury: string,
+    token?: string,
+  ) {
+    const tokenAddress =
+      token || '0x0000000000000000000000000000000000000000';
+
+    this.logger.log(
+      `Creating pool (DB-only): tier=${tier}, contribution=${contributionAmount}, maxMembers=${maxMembers}, token=${tokenAddress}`,
+    );
+
+    const pool = this.poolRepo.create({
+      tier,
+      contributionAmount,
+      maxMembers,
+      treasury,
+      token: tokenAddress,
+      currentRound: 1,
+      status: 'pending-onchain',
+    });
+
+    const saved = await this.poolRepo.save(pool);
+
+    return {
+      id: saved.id,
+      tier: saved.tier,
+      contributionAmount: saved.contributionAmount,
+      maxMembers: saved.maxMembers,
+      treasury: saved.treasury,
+      token: saved.token,
+      status: saved.status,
+    };
+  }
+
+  /**
+   * Create pool from a mined createPool tx. Waits for receipt, parses PoolCreated,
+   * and creates the pool with onChainPoolId and status active immediately.
+   */
+  async createPoolFromCreationTx(txHash: string): Promise<Pool> {
+    const hash = txHash.trim();
+    this.logger.log(`createPoolFromCreationTx: waiting for receipt txHash=${hash}`);
+    const provider = this.web3Service.getProvider();
+    const equbPool = this.web3Service.getEqubPool();
+    const equbPoolAddress = (await equbPool.getAddress()).toLowerCase();
+
+    // Wait for receipt (poll up to ~2 min)
+    let receipt: ethers.TransactionReceipt | null = null;
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      receipt = await provider.getTransactionReceipt(hash);
+      if (receipt && receipt.blockNumber) break;
+    }
+    if (!receipt || !receipt.blockNumber) {
+      throw new BadRequestException('Transaction not mined yet. Try again in a moment.');
+    }
+    if (receipt.status === 0) {
+      throw new BadRequestException(
+        'Transaction reverted on-chain. Pool was not created. If your EqubPool address points to an older contract version, update EQUB_POOL_ADDRESS (and related contracts) in .env and restart backend.',
+      );
+    }
+
+    const tx = await provider.getTransaction(hash);
+    if (!tx) throw new BadRequestException('Transaction not found');
+
+    const createdBy = tx.from ? ethers.getAddress(tx.from) : null;
+    let treasury = '0x0000000000000000000000000000000000000000';
+    if (tx.data) {
+      const parsed = equbPool.interface.parseTransaction({ data: tx.data });
+      if (parsed?.args && parsed.args.length >= 4) {
+        const t = parsed.args[3];
+        const addr = typeof t === 'string' && t.startsWith('0x') ? t : String((t as any)?.toString?.() ?? t);
+        if (addr && addr !== '0x0000000000000000000000000000000000000000') treasury = ethers.getAddress(addr);
+      }
+    }
+
+    const iface = equbPool.interface;
+    const zeroAddr = '0x0000000000000000000000000000000000000000';
+
+    let poolId: bigint | undefined;
+    let contributionAmount: bigint | undefined;
+    let maxMembers: bigint | undefined;
+    let token: string = zeroAddr;
+
+    // Try v2 PoolCreated(poolId, contributionAmount, maxMembers, token) first.
+    const v2Topic = iface.getEvent('PoolCreated')?.topicHash;
+    const v2Log = receipt.logs.find(
+      (l) => l.address.toLowerCase() === equbPoolAddress && (v2Topic && l.topics[0] === v2Topic),
+    );
+    if (v2Log) {
+      const decoded = iface.parseLog({
+        topics: v2Log.topics as string[],
+        data: v2Log.data,
+      });
+      if (decoded && decoded.name === 'PoolCreated') {
+        [poolId, contributionAmount, maxMembers, token] = decoded.args as unknown as [
+          bigint,
+          bigint,
+          bigint,
+          string,
+        ];
+      }
+    }
+
+    // Fallback for legacy deployment:
+    // PoolCreated(poolId, contributionAmount, maxMembers) without token arg.
+    if (poolId === undefined) {
+      const legacyEventIface = new ethers.Interface([
+        'event PoolCreated(uint256 indexed poolId, uint256 contributionAmount, uint256 maxMembers)',
+      ]);
+      const legacyTopic = legacyEventIface.getEvent('PoolCreated')?.topicHash;
+      const legacyLog = receipt.logs.find(
+        (l) =>
+          l.address.toLowerCase() === equbPoolAddress &&
+          (legacyTopic && l.topics[0] === legacyTopic),
+      );
+      if (legacyLog) {
+        const decodedLegacy = legacyEventIface.parseLog({
+          topics: legacyLog.topics as string[],
+          data: legacyLog.data,
+        });
+        if (decodedLegacy && decodedLegacy.name === 'PoolCreated') {
+          [poolId, contributionAmount, maxMembers] = decodedLegacy.args as unknown as [
+            bigint,
+            bigint,
+            bigint,
+          ];
+        }
+      }
+    }
+
+    if (
+      poolId === undefined ||
+      contributionAmount === undefined ||
+      maxMembers === undefined
+    ) {
+      throw new BadRequestException(
+        'PoolCreated event not found or could not be parsed from transaction logs. Ensure EQUB_POOL_ADDRESS matches the deployed EqubPool contract for this tx.',
+      );
+    }
+
+    const onChainPoolId = Number(poolId);
+    const existing = await this.poolRepo.findOne({ where: { onChainPoolId } });
+    if (existing) return existing;
+
+    const pool = this.poolRepo.create({
+      onChainPoolId,
+      tier: 0,
+      contributionAmount: contributionAmount.toString(),
+      maxMembers: Number(maxMembers),
+      currentRound: 1,
+      treasury,
+      createdBy,
+      token:
+        token && typeof token === 'string'
+          ? token
+          : (token as any)?.toString?.() ?? zeroAddr,
+      status: 'active',
+      txHash: hash.toLowerCase(),
+    });
+    const saved = await this.poolRepo.save(pool);
+    this.logger.log(`createPoolFromCreationTx: created pool id=${saved.id}, onChainPoolId=${onChainPoolId}`);
+    return saved;
+  }
+
+  async joinPool(poolId: string, walletAddress: string) {
+    this.logger.log(`User ${walletAddress} joining pool ${poolId}`);
+
+    const pool = await this.poolRepo.findOne({
+      where: { id: poolId },
+      relations: ['members'],
+    });
+    if (!pool) {
+      throw new NotFoundException(`Pool ${poolId} not found`);
+    }
+
+    if (pool.members.length >= pool.maxMembers) {
+      throw new ConflictException('Pool is full');
+    }
+
+    const existingMember = await this.memberRepo.findOne({
+      where: { poolId, walletAddress },
+    });
+    if (existingMember) {
+      throw new ConflictException('Already a member of this pool');
+    }
+
+    const member = this.memberRepo.create({ poolId, walletAddress });
+    await this.memberRepo.save(member);
+
+    return {
+      poolId,
+      walletAddress,
+      status: 'joined',
+      memberCount: pool.members.length + 1,
+    };
+  }
+
+  async recordContribution(
+    poolId: string,
+    walletAddress: string,
+    round: number,
+  ) {
+    this.logger.log(
+      `Recording contribution: pool=${poolId}, wallet=${walletAddress}, round=${round}`,
+    );
+
+    const pool = await this.poolRepo.findOne({ where: { id: poolId } });
+    if (!pool) {
+      throw new NotFoundException(`Pool ${poolId} not found`);
+    }
+
+    let isMember = await this.memberRepo.findOne({
+      where: { poolId, walletAddress },
+    });
+    if (!isMember) {
+      this.logger.log(
+        `Recording contribution: wallet ${walletAddress} not in pool_members (e.g. joined on-chain); adding member for pool ${poolId}`,
+      );
+      const member = this.memberRepo.create({ poolId, walletAddress });
+      await this.memberRepo.save(member);
+      isMember = member;
+    }
+
+    const existing = await this.contributionRepo.findOne({
+      where: { poolId, walletAddress, round },
+    });
+    if (existing) {
+      throw new ConflictException('Already contributed for this round');
+    }
+
+    const contribution = this.contributionRepo.create({
+      poolId,
+      walletAddress,
+      round,
+      status: 'pending-onchain',
+    });
+    await this.contributionRepo.save(contribution);
+
+    return {
+      poolId,
+      walletAddress,
+      round,
+      status: 'pending-onchain',
+    };
+  }
+
+  async closeRound(poolId: string, round: number) {
+    this.logger.log(`Closing round ${round} for pool ${poolId}`);
+
+    const pool = await this.poolRepo.findOne({
+      where: { id: poolId },
+      relations: ['members'],
+    });
+    if (!pool) {
+      throw new NotFoundException(`Pool ${poolId} not found`);
+    }
+
+    const contributions = await this.contributionRepo.find({
+      where: { poolId, round },
+    });
+    const contributedAddresses = new Set(
+      contributions.map((c) => c.walletAddress),
+    );
+
+    const contributors: string[] = [];
+    const defaulters: string[] = [];
+
+    for (const member of pool.members) {
+      if (contributedAddresses.has(member.walletAddress)) {
+        contributors.push(member.walletAddress);
+      } else {
+        defaulters.push(member.walletAddress);
+      }
+    }
+
+    pool.currentRound = round + 1;
+    // Persist transient closed status so UI can show round-closed
+    pool.status = 'round-closed';
+    await this.poolRepo.save(pool);
+
+    return {
+      poolId,
+      round,
+      contributors,
+      defaulters,
+      nextRound: round + 1,
+      status: 'round-closed',
+    };
+  }
+
+  async scheduleStream(
+    poolId: string,
+    beneficiary: string,
+    total: string,
+    upfrontPercent: number,
+    totalRounds: number,
+  ) {
+    this.logger.log(
+      `Scheduling payout stream: pool=${poolId}, beneficiary=${beneficiary}`,
+    );
+
+    const pool = await this.poolRepo.findOne({ where: { id: poolId } });
+    if (!pool) {
+      throw new NotFoundException(`Pool ${poolId} not found`);
+    }
+
+    if (upfrontPercent > 30) {
+      throw new BadRequestException('Upfront percent cannot exceed 30%');
+    }
+
+    const totalNum = BigInt(total);
+    const upfront = (totalNum * BigInt(upfrontPercent)) / BigInt(100);
+    const remaining = totalNum - upfront;
+    const roundAmount = remaining / BigInt(totalRounds);
+
+    const stream = this.payoutStreamRepo.create({
+      poolId,
+      beneficiary,
+      total,
+      upfrontPercent,
+      roundAmount: roundAmount.toString(),
+      totalRounds,
+      releasedRounds: 0,
+      released: upfront.toString(),
+      frozen: false,
+    });
+    await this.payoutStreamRepo.save(stream);
+
+    return {
+      poolId,
+      beneficiary,
+      total,
+      upfrontPercent,
+      roundAmount: roundAmount.toString(),
+      totalRounds,
+      status: 'stream-created',
+    };
+  }
+
+  /**
+   * Build unsigned transactions for selecting a winner and scheduling payout.
+    * Winner selection is chain-authoritative (set on closeRound in EqubPool).
+    * Flow:
+    *  1) Call once to get closeTx and sign/send it.
+    *  2) After close tx confirms, call again to receive scheduleTx with on-chain winner.
+   */
+  async buildSelectWinner(
+    poolId: string,
+    dto: {
+      winner?: string;
+      total: string;
+      upfrontPercent: number;
+      totalRounds: number;
+      caller?: string;
+    },
+  ) {
+    const pool = await this.poolRepo.findOne({ where: { id: poolId }, relations: ['members'] });
+    if (!pool) throw new NotFoundException(`Pool ${poolId} not found`);
+
+    // Verify caller is pool creator
+    if (!pool.createdBy) throw new BadRequestException('Pool creator not known; cannot authorize winner selection');
+    if (!dto.caller) throw new BadRequestException('Caller address required');
+    const { ethers } = await import('ethers');
+    const callerNorm = ethers.getAddress(dto.caller);
+    if (callerNorm.toLowerCase() !== pool.createdBy.toLowerCase()) {
+      throw new BadRequestException('Only pool creator may select the winner');
+    }
+
+    if (!pool.onChainPoolId) throw new BadRequestException('Pool not linked to on-chain pool');
+
+    // Always provide closeRound tx (idempotent client flow: call endpoint again after close confirms)
+    const closeTx = await this.buildCloseRound(pool.onChainPoolId);
+
+    const equbPool = this.web3Service.getEqubPool();
+    const zero = '0x0000000000000000000000000000000000000000';
+
+    let closedRound = 0;
+    let winnerRaw: string = zero;
+    let winnerViewUnavailable = false;
+
+    try {
+      const [closedRoundRaw, lastWinnerRaw] =
+        await equbPool.rotatingWinnerForLastClosedRound(pool.onChainPoolId);
+      closedRound = Number(closedRoundRaw);
+      winnerRaw = typeof lastWinnerRaw === 'string' ? lastWinnerRaw : String(lastWinnerRaw);
+    } catch (e) {
+      winnerViewUnavailable = true;
+      this.logger.warn(
+        `rotatingWinnerForLastClosedRound unavailable/reverted for poolId=${pool.onChainPoolId}: ${e}`,
+      );
+
+      // Fallback for contracts exposing roundWinner/currentRound but not rotatingWinnerForLastClosedRound.
+      try {
+        const currentRoundRaw = await equbPool.currentRound(pool.onChainPoolId);
+        const candidateRound = Number(currentRoundRaw) - 1;
+        if (candidateRound > 0) {
+          const candidateWinner = await equbPool.roundWinner(
+            pool.onChainPoolId,
+            candidateRound,
+          );
+          closedRound = candidateRound;
+          winnerRaw =
+            typeof candidateWinner === 'string'
+              ? candidateWinner
+              : String(candidateWinner);
+          winnerViewUnavailable = false;
+        }
+      } catch (fallbackErr) {
+        this.logger.warn(
+          `roundWinner/currentRound fallback unavailable for poolId=${pool.onChainPoolId}: ${fallbackErr}`,
+        );
+      }
+    }
+
+    let scheduleTx: UnsignedTxDto | null = null;
+    let winner: string | null = null;
+
+    if (closedRound > 0 && typeof winnerRaw === 'string' && winnerRaw.toLowerCase() !== zero.toLowerCase()) {
+      let alreadyScheduled = false;
+      try {
+        alreadyScheduled = await equbPool.winnerScheduled(
+          pool.onChainPoolId,
+          closedRound,
+        );
+      } catch (e) {
+        this.logger.warn(
+          `winnerScheduled unavailable/reverted for poolId=${pool.onChainPoolId}, round=${closedRound}: ${e}`,
+        );
+      }
+
+      if (!alreadyScheduled) {
+        winner = ethers.getAddress(winnerRaw);
+
+        if (dto.winner) {
+          const provided = ethers.getAddress(dto.winner);
+          if (provided.toLowerCase() !== winner.toLowerCase()) {
+            throw new BadRequestException(
+              `Provided winner does not match on-chain selected winner for closed round ${closedRound}`,
+            );
+          }
+        }
+
+        scheduleTx = await this.buildScheduleStream(
+          pool.onChainPoolId,
+          winner,
+          dto.total,
+          dto.upfrontPercent,
+          dto.totalRounds,
+        );
+      }
+    }
+
+    return {
+      closeTx,
+      scheduleTx,
+      winner,
+      round: closedRound || pool.currentRound,
+      warning:
+        winnerViewUnavailable && !scheduleTx
+          ? 'Winner read method is unavailable on deployed EqubPool. Close the round and requery. If scheduleTx never appears, deploy the latest EqubPool or use manual winner flow.'
+          : null,
+      nextAction: scheduleTx
+        ? 'sign_schedule_tx'
+        : winnerViewUnavailable
+          ? 'sign_close_tx_then_requery_or_upgrade_contract'
+          : 'sign_close_tx_then_requery_for_schedule',
+    };
+  }
+}
