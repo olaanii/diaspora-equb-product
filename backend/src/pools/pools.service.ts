@@ -4,6 +4,8 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -13,10 +15,44 @@ import { Contribution } from '../entities/contribution.entity';
 import { PayoutStreamEntity } from '../entities/payout-stream.entity';
 import { ethers } from 'ethers';
 import { Web3Service, UnsignedTxDto } from '../web3/web3.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class PoolsService {
   private readonly logger = new Logger(PoolsService.name);
+  private readonly selectWinnerCloseCooldownMs = 8000;
+  private readonly selectWinnerCloseGuard = new Map<string, number>();
+
+  private enforceSelectWinnerCloseCooldown(
+    poolId: string,
+    caller: string,
+  ): void {
+    const now = Date.now();
+    const key = `${poolId}:${caller.toLowerCase()}`;
+    const lastAttempt = this.selectWinnerCloseGuard.get(key);
+
+    if (lastAttempt) {
+      const elapsed = now - lastAttempt;
+      if (elapsed < this.selectWinnerCloseCooldownMs) {
+        const waitSec = Math.ceil(
+          (this.selectWinnerCloseCooldownMs - elapsed) / 1000,
+        );
+        throw new HttpException(
+          `Please wait ${waitSec}s before retrying close-round winner selection for this pool.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
+    this.selectWinnerCloseGuard.set(key, now);
+
+    if (this.selectWinnerCloseGuard.size > 1000) {
+      const cutoff = now - this.selectWinnerCloseCooldownMs * 2;
+      for (const [guardKey, timestamp] of this.selectWinnerCloseGuard) {
+        if (timestamp < cutoff) this.selectWinnerCloseGuard.delete(guardKey);
+      }
+    }
+  }
 
   constructor(
     @InjectRepository(Pool)
@@ -28,6 +64,7 @@ export class PoolsService {
     @InjectRepository(PayoutStreamEntity)
     private readonly payoutStreamRepo: Repository<PayoutStreamEntity>,
     private readonly web3Service: Web3Service,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ─── TX Builder Methods (return unsigned calldata for client-side signing) ───
@@ -517,6 +554,8 @@ export class PoolsService {
     const provider = this.web3Service.getProvider();
     const equbPool = this.web3Service.getEqubPool();
     const equbPoolAddress = (await equbPool.getAddress()).toLowerCase();
+    const tx = await provider.getTransaction(hash);
+    const createdBy = tx?.from ? ethers.getAddress(tx.from) : null;
 
     // Wait for receipt (poll up to ~2 min)
     let receipt: ethers.TransactionReceipt | null = null;
@@ -529,15 +568,30 @@ export class PoolsService {
       throw new BadRequestException('Transaction not mined yet. Try again in a moment.');
     }
     if (receipt.status === 0) {
+      if (createdBy) {
+        this.notifications
+          .create(
+            createdBy,
+            'pool_created',
+            'Pool Creation Failed',
+            'Pool creation transaction reverted on-chain.',
+            {
+              txHash: hash.toLowerCase(),
+              status: 'failed',
+              kind: 'transaction',
+              idempotencyKey: `pool_created_failed:${createdBy.toLowerCase()}:${hash.toLowerCase()}`,
+            },
+          )
+          .catch((error) => {
+            this.logger.warn(`Failed to emit pool_created failure notification: ${error?.message ?? error}`);
+          });
+      }
       throw new BadRequestException(
         'Transaction reverted on-chain. Pool was not created. If your EqubPool address points to an older contract version, update EQUB_POOL_ADDRESS (and related contracts) in .env and restart backend.',
       );
     }
-
-    const tx = await provider.getTransaction(hash);
     if (!tx) throw new BadRequestException('Transaction not found');
 
-    const createdBy = tx.from ? ethers.getAddress(tx.from) : null;
     let treasury = '0x0000000000000000000000000000000000000000';
     if (tx.data) {
       const parsed = equbPool.interface.parseTransaction({ data: tx.data });
@@ -634,6 +688,29 @@ export class PoolsService {
     });
     const saved = await this.poolRepo.save(pool);
     this.logger.log(`createPoolFromCreationTx: created pool id=${saved.id}, onChainPoolId=${onChainPoolId}`);
+
+    if (createdBy) {
+      this.notifications
+        .create(
+          createdBy,
+          'pool_created',
+          'Pool Created',
+          `Your pool was created successfully (Pool #${onChainPoolId}).`,
+          {
+            poolId: saved.id,
+            onChainPoolId,
+            contributionAmount: contributionAmount.toString(),
+            maxMembers: Number(maxMembers),
+            token: pool.token,
+            txHash: hash.toLowerCase(),
+            idempotencyKey: `pool_created:${createdBy.toLowerCase()}:${onChainPoolId}:${hash.toLowerCase()}`,
+          },
+        )
+        .catch((error) => {
+          this.logger.warn(`Failed to emit pool_created notification: ${error?.message ?? error}`);
+        });
+    }
+
     return saved;
   }
 
@@ -822,6 +899,7 @@ export class PoolsService {
   async buildSelectWinner(
     poolId: string,
     dto: {
+      phase?: 'auto' | 'close' | 'schedule';
       winner?: string;
       total: string;
       upfrontPercent: number;
@@ -843,8 +921,30 @@ export class PoolsService {
 
     if (!pool.onChainPoolId) throw new BadRequestException('Pool not linked to on-chain pool');
 
-    // Always provide closeRound tx (idempotent client flow: call endpoint again after close confirms)
-    const closeTx = await this.buildCloseRound(pool.onChainPoolId);
+    const phase = dto.phase ?? 'auto';
+
+    const shouldBuildCloseTx = phase !== 'schedule';
+    const shouldAttemptSchedule = phase !== 'close';
+
+    if (shouldBuildCloseTx) {
+      this.enforceSelectWinnerCloseCooldown(poolId, callerNorm);
+    }
+
+    let closeTx: UnsignedTxDto | null = null;
+    if (shouldBuildCloseTx) {
+      closeTx = await this.buildCloseRound(pool.onChainPoolId);
+    }
+
+    if (!shouldAttemptSchedule) {
+      return {
+        closeTx,
+        scheduleTx: null,
+        winner: null,
+        round: pool.currentRound,
+        warning: null,
+        nextAction: 'sign_close_tx_then_requery_for_schedule',
+      };
+    }
 
     const equbPool = this.web3Service.getEqubPool();
     const zero = '0x0000000000000000000000000000000000000000';
@@ -859,10 +959,16 @@ export class PoolsService {
       closedRound = Number(closedRoundRaw);
       winnerRaw = typeof lastWinnerRaw === 'string' ? lastWinnerRaw : String(lastWinnerRaw);
     } catch (e) {
-      winnerViewUnavailable = true;
-      this.logger.warn(
-        `rotatingWinnerForLastClosedRound unavailable/reverted for poolId=${pool.onChainPoolId}: ${e}`,
-      );
+      const msg = e instanceof Error ? e.message : String(e);
+      const likelyNotReady =
+        msg.includes('require(false)') || msg.includes('no data present');
+
+      if (!likelyNotReady) {
+        winnerViewUnavailable = true;
+        this.logger.warn(
+          `rotatingWinnerForLastClosedRound unavailable/reverted for poolId=${pool.onChainPoolId}: ${e}`,
+        );
+      }
 
       // Fallback for contracts exposing roundWinner/currentRound but not rotatingWinnerForLastClosedRound.
       try {
@@ -881,9 +987,16 @@ export class PoolsService {
           winnerViewUnavailable = false;
         }
       } catch (fallbackErr) {
-        this.logger.warn(
-          `roundWinner/currentRound fallback unavailable for poolId=${pool.onChainPoolId}: ${fallbackErr}`,
-        );
+        const fallbackMsg =
+          fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        const likelyNotReady =
+          fallbackMsg.includes('require(false)') ||
+          fallbackMsg.includes('no data present');
+        if (!likelyNotReady) {
+          this.logger.warn(
+            `roundWinner/currentRound fallback unavailable for poolId=${pool.onChainPoolId}: ${fallbackErr}`,
+          );
+        }
       }
     }
 
@@ -938,7 +1051,9 @@ export class PoolsService {
         ? 'sign_schedule_tx'
         : winnerViewUnavailable
           ? 'sign_close_tx_then_requery_or_upgrade_contract'
-          : 'sign_close_tx_then_requery_for_schedule',
+          : phase === 'schedule'
+            ? 'await_close_confirmation_then_requery_schedule'
+            : 'sign_close_tx_then_requery_for_schedule',
     };
   }
 }

@@ -363,6 +363,7 @@ class PoolProvider extends ChangeNotifier {
     try {
       final payload = await _api.buildSelectWinner(
         poolId: poolId,
+        phase: 'close',
         total: total,
         upfrontPercent: upfrontPercent,
         totalRounds: totalRounds,
@@ -396,11 +397,12 @@ class PoolProvider extends ChangeNotifier {
               (warning?.isNotEmpty ?? false);
 
       if (scheduleTx == null && !shouldSkipPolling) {
-        for (int attempt = 0; attempt < 6; attempt++) {
+        for (int attempt = 0; attempt < 3; attempt++) {
           await Future.delayed(const Duration(seconds: 2));
 
           final followUp = await _api.buildSelectWinner(
             poolId: poolId,
+            phase: 'schedule',
             total: total,
             upfrontPercent: upfrontPercent,
             totalRounds: totalRounds,
@@ -520,3 +522,5 @@ class PoolProvider extends ChangeNotifier {
       notifyListeners();
       return null;
     }
+  }
+}

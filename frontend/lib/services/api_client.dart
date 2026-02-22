@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../config/app_config.dart';
@@ -257,8 +259,10 @@ class ApiClient {
     required int upfrontPercent,
     required int totalRounds,
     required String caller,
+    String phase = 'auto',
   }) async {
     final response = await _dio.post('/pools/$poolId/select-winner', data: {
+      'phase': phase,
       'total': total,
       'upfrontPercent': upfrontPercent,
       'totalRounds': totalRounds,
@@ -294,8 +298,7 @@ class ApiClient {
     required String amount,
     String tokenSymbol = 'USDC',
   }) async {
-    final response =
-        await _dio.post('/collateral/build/deposit-token', data: {
+    final response = await _dio.post('/collateral/build/deposit-token', data: {
       'amount': amount,
       'tokenSymbol': tokenSymbol,
     });
@@ -388,8 +391,8 @@ class ApiClient {
     return response.data;
   }
 
-  Future<Map<String, dynamic>> getTokenBalance(
-      String walletAddress, {String token = 'USDC'}) async {
+  Future<Map<String, dynamic>> getTokenBalance(String walletAddress,
+      {String token = 'USDC'}) async {
     final response = await _dio.get('/token/balance', queryParameters: {
       'walletAddress': walletAddress,
       'token': token,
@@ -398,11 +401,24 @@ class ApiClient {
   }
 
   Future<List<dynamic>> getTokenTransactions(
-      String walletAddress, {String token = 'USDC', int limit = 50}) async {
+    String walletAddress, {
+    String token = 'ALL',
+    int limit = 50,
+    int? fromTimestamp,
+    int? toTimestamp,
+    String? direction,
+    String? status,
+    String? cursor,
+  }) async {
     final response = await _dio.get('/token/transactions', queryParameters: {
       'walletAddress': walletAddress,
       'token': token,
       'limit': limit,
+      if (fromTimestamp != null) 'fromTimestamp': fromTimestamp,
+      if (toTimestamp != null) 'toTimestamp': toTimestamp,
+      if (direction != null && direction.isNotEmpty) 'direction': direction,
+      if (status != null && status.isNotEmpty) 'status': status,
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
     });
     // Ensure we always return a list so UI doesn't break on unexpected shape
     final data = response.data;
@@ -453,7 +469,8 @@ class ApiClient {
   }
 
   // ── Notifications ──────────────────────────────
-  Future<List<dynamic>> getNotifications({int limit = 50, int offset = 0}) async {
+  Future<List<dynamic>> getNotifications(
+      {int limit = 50, int offset = 0}) async {
     final response = await _dio.get('/notifications', queryParameters: {
       'limit': limit,
       'offset': offset,
@@ -472,6 +489,48 @@ class ApiClient {
 
   Future<void> markAllNotificationsRead() async {
     await _dio.patch('/notifications/read-all');
+  }
+
+  Future<Map<String, dynamic>> getNotificationsIncremental({
+    String? afterCreatedAt,
+    String? afterId,
+    int limit = 50,
+  }) async {
+    final response = await _dio.get('/notifications/incremental',
+        queryParameters: {
+      if (afterCreatedAt != null && afterCreatedAt.isNotEmpty)
+        'afterCreatedAt': afterCreatedAt,
+      if (afterId != null && afterId.isNotEmpty) 'afterId': afterId,
+      'limit': limit,
+    });
+    return Map<String, dynamic>.from(response.data as Map);
+  }
+
+  Future<Stream<String>> openNotificationEventStream() async {
+    final response = await _dio.get<ResponseBody>(
+      '/notifications/stream',
+      options: Options(
+        responseType: ResponseType.stream,
+        headers: {
+          'Accept': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+        },
+        receiveTimeout: const Duration(minutes: 10),
+      ),
+    );
+
+    final body = response.data;
+    if (body == null) {
+      throw DioException(
+        requestOptions: response.requestOptions,
+        message: 'Notification stream unavailable',
+      );
+    }
+
+    return body.stream
+        .map<List<int>>((chunk) => chunk)
+        .transform(utf8.decoder)
+        .transform(const LineSplitter());
   }
 
   // ── Health ────────────────────────────────────

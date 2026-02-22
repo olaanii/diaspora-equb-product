@@ -6,6 +6,7 @@ import 'package:sentry_flutter/sentry_flutter.dart';
 import 'config/theme.dart';
 import 'config/router.dart';
 import 'services/api_client.dart';
+import 'services/app_snackbar_service.dart';
 import 'services/wallet_service.dart';
 import 'providers/auth_provider.dart';
 import 'providers/pool_provider.dart';
@@ -33,10 +34,18 @@ Future<void> main() async {
 
   await authProvider.tryAutoLogin();
 
-  if (authProvider.isAuthenticated) {
-    unawaited(notificationProvider.refreshUnreadCount());
-    notificationProvider.startPolling();
-  }
+  notificationProvider.handleAuthStateChanged(authProvider.isAuthenticated);
+
+  var previousAuthState = authProvider.isAuthenticated;
+  authProvider.addListener(() {
+    final isAuthenticated = authProvider.isAuthenticated;
+    if (isAuthenticated == previousAuthState) {
+      return;
+    }
+
+    previousAuthState = isAuthenticated;
+    notificationProvider.handleAuthStateChanged(isAuthenticated);
+  });
 
   final router = createRouter(authProvider);
 
@@ -68,20 +77,44 @@ Future<void> main() async {
   }
 }
 
-class DiasporaEqubApp extends StatelessWidget {
+class DiasporaEqubApp extends StatefulWidget {
   final GoRouter router;
 
   const DiasporaEqubApp({super.key, required this.router});
+
+  @override
+  State<DiasporaEqubApp> createState() => _DiasporaEqubAppState();
+}
+
+class _DiasporaEqubAppState extends State<DiasporaEqubApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    context.read<NotificationProvider>().handleAppLifecycleChanged(state);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'Diaspora Equb',
       debugShowCheckedModeBanner: false,
+      scaffoldMessengerKey: AppSnackbarService.instance.messengerKey,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.system,
-      routerConfig: router,
+      routerConfig: widget.router,
     );
   }
 }

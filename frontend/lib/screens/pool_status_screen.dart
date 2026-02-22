@@ -3,7 +3,9 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../providers/pool_provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/notification_provider.dart';
 import '../providers/wallet_provider.dart';
+import '../services/app_snackbar_service.dart';
 import '../services/wallet_service.dart';
 import '../config/theme.dart';
 import '../config/app_config.dart';
@@ -98,11 +100,10 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
   ) async {
     final onChainPoolId = pool['onChainPoolId'];
     if (onChainPoolId == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pool has no on-chain ID yet.')),
-        );
-      }
+      AppSnackbarService.instance.warning(
+        message: 'Pool has no on-chain ID yet.',
+        dedupeKey: 'pool_status_missing_onchain_id',
+      );
       return;
     }
 
@@ -111,11 +112,10 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     final members = pool['members'] as List? ?? [];
     final memberCount = members.length;
     if (memberCount == 0) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pool has no members yet.')),
-        );
-      }
+      AppSnackbarService.instance.warning(
+        message: 'Pool has no members yet.',
+        dedupeKey: 'pool_status_no_members',
+      );
       return;
     }
 
@@ -126,16 +126,11 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     final total = totalWei.toString();
 
     setState(() => _isSelectingWinner = true);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Step 1/2: Close round — confirm in wallet...',
-          ),
-          duration: Duration(seconds: 3),
-        ),
-      );
-    }
+    AppSnackbarService.instance.info(
+      message: 'Step 1/2: Close round — confirm in wallet...',
+      dedupeKey: 'pool_status_select_winner_close_pending',
+      duration: const Duration(seconds: 3),
+    );
     final result = await pools.buildAndSignSelectWinner(
       poolId: widget.poolId,
       total: total,
@@ -143,18 +138,17 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       totalRounds: totalRounds,
       caller: caller,
       onProgress: (message) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            duration: const Duration(seconds: 3),
-          ),
+        AppSnackbarService.instance.info(
+          message: message,
+          dedupeKey: 'pool_status_select_winner_progress_$message',
+          duration: const Duration(seconds: 3),
         );
       },
     );
     if (!mounted) return;
     setState(() => _isSelectingWinner = false);
     if (result != null) {
+      context.read<NotificationProvider>().triggerFastSync();
       final auth = context.read<AuthProvider>();
       if (auth.walletAddress != null) {
         await context
@@ -171,50 +165,45 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
 
       if (!mounted) return;
       if (scheduleTxHash.isNotEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
+        AppSnackbarService.instance.success(
+          message:
               'Winner scheduled: ${_truncateAddress(winner)}. Close TX: ${_shortTx(closeTxHash)}... Schedule TX: ${_shortTx(scheduleTxHash)}...',
-            ),
-            duration: const Duration(seconds: 4),
-            action: SnackBarAction(
-              label: 'View',
-              onPressed: () {
-                debugPrint('${AppConfig.explorerUrl}/tx/$scheduleTxHash');
-              },
-            ),
-          ),
+          dedupeKey: 'pool_status_select_winner_success_$scheduleTxHash',
+          duration: const Duration(seconds: 4),
+          actionLabel: 'View',
+          onAction: () {
+            debugPrint('${AppConfig.explorerUrl}/tx/$scheduleTxHash');
+          },
         );
       } else {
         final winnerText =
             winner.isNotEmpty ? ' Winner: ${_truncateAddress(winner)}.' : '';
         final needsUpgradePath = nextAction.contains('upgrade_contract');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              needsUpgradePath
-                  ? 'Round closed (TX: ${_shortTx(closeTxHash)}...).$winnerText ${warning.isNotEmpty ? warning : 'Winner scheduling is unavailable on this deployed contract version.'}'
-                  : 'Round closed (TX: ${_shortTx(closeTxHash)}...).$winnerText Waiting for payout transaction readiness. Please tap Select Winner again in a few seconds.',
-            ),
+        if (needsUpgradePath) {
+          AppSnackbarService.instance.error(
+            message:
+                'Round closed (TX: ${_shortTx(closeTxHash)}...).$winnerText ${warning.isNotEmpty ? warning : 'Winner scheduling is unavailable on this deployed contract version.'}',
+            dedupeKey: 'pool_status_select_winner_upgrade_$closeTxHash',
             duration: const Duration(seconds: 5),
-            backgroundColor:
-                needsUpgradePath ? Colors.red.shade700 : Colors.orange.shade700,
-          ),
-        );
+          );
+        } else {
+          AppSnackbarService.instance.warning(
+            message:
+                'Round closed (TX: ${_shortTx(closeTxHash)}...).$winnerText Waiting for payout transaction readiness. Please tap Select Winner again in a few seconds.',
+            dedupeKey: 'pool_status_select_winner_wait_$closeTxHash',
+            duration: const Duration(seconds: 5),
+          );
+        }
 
         if (nextAction.isNotEmpty) {
           debugPrint('Select-winner nextAction: $nextAction');
         }
       }
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            pools.errorMessage ??
-                'Auto winner selection failed or was rejected',
-          ),
-          backgroundColor: Colors.red.shade700,
-        ),
+      AppSnackbarService.instance.error(
+        message:
+            pools.errorMessage ?? 'Auto winner selection failed or was rejected',
+        dedupeKey: 'pool_status_select_winner_failed',
       );
     }
   }
@@ -228,30 +217,22 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     final contributionAmount = pool['contributionAmount'] ?? '0';
 
     if (onChainPoolId == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Pool has no on-chain ID yet.'),
-          ),
-        );
-      }
+      AppSnackbarService.instance.warning(
+        message: 'Pool has no on-chain ID yet.',
+        dedupeKey: 'pool_status_missing_onchain_id_contribute',
+      );
       return;
     }
 
     setState(() => _isContributing = true);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _isErc20Pool
-                ? 'Step 1/2: Approve $_tokenSymbol spending — confirm in wallet...'
-                : 'Contributing $contributionAmount — confirm in your wallet...',
-          ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
+    AppSnackbarService.instance.info(
+      message: _isErc20Pool
+          ? 'Step 1/2: Approve $_tokenSymbol spending — confirm in wallet...'
+          : 'Contributing $contributionAmount — confirm in your wallet...',
+      dedupeKey: 'pool_status_contribute_pending',
+      duration: const Duration(seconds: 3),
+    );
 
     String? txHash;
 
@@ -274,6 +255,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     setState(() => _isContributing = false);
 
     if (txHash != null) {
+      context.read<NotificationProvider>().triggerFastSync();
       final auth = context.read<AuthProvider>();
       if (auth.walletAddress != null) {
         await context.read<WalletProvider>().refreshAfterTx(
@@ -284,29 +266,22 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       await pools.loadPool(widget.poolId);
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content:
-              Text('Contribution confirmed! TX: ${txHash.substring(0, 16)}...'),
-          duration: const Duration(seconds: 4),
-          action: SnackBarAction(
-            label: 'View',
-            onPressed: () {
-              debugPrint('${AppConfig.explorerUrl}/tx/$txHash');
-            },
-          ),
-        ),
+      AppSnackbarService.instance.success(
+        message: 'Contribution confirmed! TX: ${txHash.substring(0, 16)}...',
+        dedupeKey: 'pool_status_contribute_success_$txHash',
+        duration: const Duration(seconds: 4),
+        actionLabel: 'View',
+        onAction: () {
+          debugPrint('${AppConfig.explorerUrl}/tx/$txHash');
+        },
       );
     } else {
       final err = pools.errorMessage ?? 'Contribution failed or rejected';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
+      AppSnackbarService.instance.error(
+        message:
             '$err\nTip: Join the pool first, contribute once per round, and use the Contribute button (not a direct send to the pool address).',
-          ),
-          backgroundColor: Colors.red.shade700,
-          duration: const Duration(seconds: 6),
-        ),
+        dedupeKey: 'pool_status_contribute_failed',
+        duration: const Duration(seconds: 6),
       );
     }
   }
@@ -318,23 +293,19 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
   ) async {
     final onChainPoolId = pool['onChainPoolId'];
     if (onChainPoolId == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Pool has no on-chain ID yet.')),
-        );
-      }
+      AppSnackbarService.instance.warning(
+        message: 'Pool has no on-chain ID yet.',
+        dedupeKey: 'pool_status_missing_onchain_id_join',
+      );
       return;
     }
 
     setState(() => _isJoining = true);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Joining pool — confirm in your wallet...'),
-          duration: Duration(seconds: 3),
-        ),
-      );
-    }
+    AppSnackbarService.instance.info(
+      message: 'Joining pool — confirm in your wallet...',
+      dedupeKey: 'pool_status_join_pending',
+      duration: const Duration(seconds: 3),
+    );
 
     final caller = wallet.walletAddress;
     final txHash = await pools.buildAndSignJoinPool(
@@ -345,6 +316,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     setState(() => _isJoining = false);
 
     if (txHash != null) {
+      context.read<NotificationProvider>().triggerFastSync();
       final auth = context.read<AuthProvider>();
       if (auth.walletAddress != null) {
         await context
@@ -354,38 +326,30 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       await pools.loadPool(widget.poolId);
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Joined pool successfully! TX: ${_shortTx(txHash, length: 16)}...'),
-          duration: const Duration(seconds: 4),
-          action: SnackBarAction(
-            label: 'View',
-            onPressed: () => debugPrint('${AppConfig.explorerUrl}/tx/$txHash'),
-          ),
-        ),
+      AppSnackbarService.instance.success(
+        message:
+            'Joined pool successfully! TX: ${_shortTx(txHash, length: 16)}...',
+        dedupeKey: 'pool_status_join_success_$txHash',
+        duration: const Duration(seconds: 4),
+        actionLabel: 'View',
+        onAction: () => debugPrint('${AppConfig.explorerUrl}/tx/$txHash'),
       );
     } else {
       final err = pools.errorMessage ?? 'Join failed or rejected';
       final isIdentityNotBound =
           err.toLowerCase().contains('identity is not bound on-chain');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
+      AppSnackbarService.instance.error(
+        message:
             '$err\nTip: Make sure your wallet is identity-verified and the pool still has open member slots.',
-          ),
-          backgroundColor: Colors.red.shade700,
-          duration: const Duration(seconds: 6),
-          action: isIdentityNotBound
-              ? SnackBarAction(
-                  label: 'Bind Now',
-                  onPressed: () {
-                    final auth = context.read<AuthProvider>();
-                    _bindIdentityOnChain(auth);
-                  },
-                )
-              : null,
-        ),
+        dedupeKey: 'pool_status_join_failed',
+        duration: const Duration(seconds: 6),
+        actionLabel: isIdentityNotBound ? 'Bind Now' : null,
+        onAction: isIdentityNotBound
+            ? () {
+                final auth = context.read<AuthProvider>();
+                _bindIdentityOnChain(auth);
+              }
+            : null,
       );
     }
   }
@@ -394,47 +358,38 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     if (_isBindingIdentity) return;
 
     setState(() => _isBindingIdentity = true);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Binding identity on-chain — confirm in wallet...'),
-          duration: Duration(seconds: 3),
-        ),
-      );
-    }
+    AppSnackbarService.instance.info(
+      message: 'Binding identity on-chain — confirm in wallet...',
+      dedupeKey: 'pool_status_bind_identity_pending',
+      duration: const Duration(seconds: 3),
+    );
 
     final txHash = await auth.bindIdentityOnChain();
     if (!mounted) return;
     setState(() => _isBindingIdentity = false);
 
     if (txHash != null) {
+      context.read<NotificationProvider>().triggerFastSync();
       if (auth.walletAddress != null) {
         await context
             .read<WalletProvider>()
             .refreshAfterTx(auth.walletAddress!);
       }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
+      AppSnackbarService.instance.success(
+        message:
             'Identity bound on-chain. TX: ${_shortTx(txHash, length: 16)}... You can now join the pool.',
-          ),
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'View',
-            onPressed: () => debugPrint('${AppConfig.explorerUrl}/tx/$txHash'),
-          ),
-        ),
+        dedupeKey: 'pool_status_bind_identity_success_$txHash',
+        duration: const Duration(seconds: 5),
+        actionLabel: 'View',
+        onAction: () => debugPrint('${AppConfig.explorerUrl}/tx/$txHash'),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
+      AppSnackbarService.instance.error(
+        message:
             auth.errorMessage ?? 'Identity binding failed or was rejected.',
-          ),
-          backgroundColor: Colors.red.shade700,
-          duration: const Duration(seconds: 6),
-        ),
+        dedupeKey: 'pool_status_bind_identity_failed',
+        duration: const Duration(seconds: 6),
       );
     }
   }
@@ -489,16 +444,19 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       round,
     );
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(success
-              ? 'Contribution recorded for round $round!'
-              : pools.errorMessage ?? 'Contribution failed'),
-        ),
-      );
+      if (success) {
+        AppSnackbarService.instance.success(
+          message: 'Contribution recorded for round $round!',
+          dedupeKey: 'pool_status_legacy_contribute_success_$round',
+        );
+      } else {
+        AppSnackbarService.instance.error(
+          message: pools.errorMessage ?? 'Contribution failed',
+          dedupeKey: 'pool_status_legacy_contribute_failed',
+        );
+      }
     }
   }
-
   @override
   Widget build(BuildContext context) {
     final pools = context.watch<PoolProvider>();

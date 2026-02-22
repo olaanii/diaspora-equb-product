@@ -6,10 +6,12 @@ import { Pool } from '../entities/pool.entity';
 import { PoolMember } from '../entities/pool-member.entity';
 import { Contribution } from '../entities/contribution.entity';
 import { PayoutStreamEntity } from '../entities/payout-stream.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Pool, PoolMember, Contribution, PayoutStreamEntity]),
+    NotificationsModule,
   ],
   controllers: [PoolsController],
   providers: [PoolsService],
