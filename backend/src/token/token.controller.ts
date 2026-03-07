@@ -1,14 +1,16 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Header, Post, Query } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
   ApiBearerAuth,
   ApiQuery,
 } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import { TokenService } from './token.service';
 import {
   FaucetDto,
   GetTransactionsQueryDto,
+  PortfolioQueryDto,
   TransferDto,
   WithdrawDto,
 } from './dto/token.dto';
@@ -25,13 +27,58 @@ export class TokenController {
   @ApiQuery({
     name: 'token',
     required: false,
-    description: 'Token symbol (USDC, USDT)',
+    description: 'Token symbol (USDC, USDT) or native (CTC, tCTC)',
+  })
+  @ApiQuery({
+    name: 'tokenAddress',
+    required: false,
+    description: 'ERC-20 contract address (overrides symbol lookup)',
   })
   getBalance(
     @Query('walletAddress') walletAddress: string,
     @Query('token') token?: string,
+    @Query('tokenAddress') tokenAddress?: string,
   ) {
-    return this.tokenService.getBalance(walletAddress, token || 'USDC');
+    return this.tokenService.getBalance(
+      walletAddress,
+      token || 'USDC',
+      tokenAddress,
+    );
+  }
+
+  @Get('allowance')
+  @ApiOperation({ summary: 'Get ERC-20 allowance for a spender' })
+  @ApiQuery({ name: 'walletAddress', description: 'EVM wallet address' })
+  @ApiQuery({ name: 'spender', description: 'Spender contract address' })
+  @ApiQuery({
+    name: 'token',
+    required: false,
+    description: 'Token symbol (USDC, USDT)',
+  })
+  @ApiQuery({
+    name: 'tokenAddress',
+    required: false,
+    description: 'ERC-20 contract address (overrides symbol lookup)',
+  })
+  @ApiQuery({
+    name: 'requiredAmountRaw',
+    required: false,
+    description: 'Optional raw amount to compare against allowance',
+  })
+  getAllowance(
+    @Query('walletAddress') walletAddress: string,
+    @Query('spender') spender: string,
+    @Query('token') token?: string,
+    @Query('tokenAddress') tokenAddress?: string,
+    @Query('requiredAmountRaw') requiredAmountRaw?: string,
+  ) {
+    return this.tokenService.getAllowance(
+      walletAddress,
+      spender,
+      token || 'USDC',
+      tokenAddress,
+      requiredAmountRaw,
+    );
   }
 
   @Get('transactions')
@@ -130,7 +177,22 @@ export class TokenController {
   }
 
   @Get('rates')
-  @ApiOperation({ summary: 'Get exchange rates' })
+  @SkipThrottle()
+  @Header('Cache-Control', 'public, max-age=300')
+  @ApiOperation({ summary: 'Live CTC/USDC/USDT → USD rates from CoinGecko' })
+  getRates() {
+    return this.tokenService.getRates();
+  }
+
+  @Get('portfolio')
+  @ApiOperation({ summary: 'Aggregated portfolio with USD values' })
+  @ApiQuery({ name: 'wallet', description: 'EVM wallet address' })
+  getPortfolio(@Query() query: PortfolioQueryDto) {
+    return this.tokenService.getPortfolio(query.wallet);
+  }
+
+  @Get('exchange-rates')
+  @ApiOperation({ summary: 'Get fiat exchange rates (USD base)' })
   getExchangeRates() {
     return this.tokenService.getExchangeRates();
   }

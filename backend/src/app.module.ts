@@ -7,6 +7,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { envValidationSchema } from './config/env.validation';
 import { getDatabaseConfig } from './config/database.config';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { AppController } from './app.controller';
 import { LoggingMiddleware } from './common/middleware/logging.middleware';
 
 import { AuthModule } from './auth/auth.module';
@@ -20,6 +21,16 @@ import { TokenModule } from './token/token.module';
 import { HealthModule } from './health/health.module';
 import { IndexerModule } from './indexer/indexer.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { RulesModule } from './rules/rules.module';
+import { SecurityModule } from './security/security.module';
+import { SwapModule } from './swap/swap.module';
+import { ReferralModule } from './referral/referral.module';
+import { GovernanceModule } from './governance/governance.module';
+import { BadgesModule } from './badges/badges.module';
+import { CacheModule } from './cache/cache.module';
+import { JobsModule } from './jobs/jobs.module';
+import { WebsocketModule } from './websocket/websocket.module';
 
 @Module({
   imports: [
@@ -44,6 +55,11 @@ import { NotificationsModule } from './notifications/notifications.module';
       },
     ]),
 
+    // Global infrastructure
+    CacheModule,
+    JobsModule,
+    WebsocketModule,
+
     // Feature modules
     AuthModule,
     CollateralModule,
@@ -56,7 +72,15 @@ import { NotificationsModule } from './notifications/notifications.module';
     HealthModule,
     IndexerModule,
     NotificationsModule,
+    AnalyticsModule,
+    RulesModule,
+    SecurityModule,
+    GovernanceModule,
+    ReferralModule,
+    SwapModule,
+    BadgesModule,
   ],
+  controllers: [AppController],
   providers: [
     // Global JWT authentication guard
     {

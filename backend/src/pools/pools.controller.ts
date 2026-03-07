@@ -1,4 +1,13 @@
-import { Body, Controller, Post, Get, Param, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Post,
+  Get,
+  Param,
+  Query,
+  Req,
+  Headers,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -14,6 +23,7 @@ import {
   RecordContributionDto,
   CloseRoundDto,
   ScheduleStreamDto,
+  CreateSeasonDto,
 } from './dto/pool.dto';
 
 @ApiTags('Pools')
@@ -29,6 +39,40 @@ export class PoolsController {
   ) {
     const result = await this.poolsService.buildSelectWinner(id, body as any);
     return result;
+  }
+
+  @Post(':poolId/rounds/active/close')
+  async closeActiveRound(
+    @Param('poolId') poolId: string,
+    @Req() req: any,
+  ) {
+    return this.poolsService.closeActiveRound(poolId, req?.user?.walletAddress);
+  }
+
+  @Post(':poolId/rounds/active/pick-winner')
+  async pickWinnerForActiveRound(
+    @Param('poolId') poolId: string,
+    @Body() body: { mode?: 'auto' },
+    @Headers('idempotency-key') idempotencyKey: string,
+    @Req() req: any,
+  ) {
+    return this.poolsService.pickWinnerForActiveRound({
+      poolId,
+      mode: body?.mode ?? 'auto',
+      idempotencyKey,
+      caller: req?.user?.walletAddress,
+    });
+  }
+
+  @Post(':id/seasons')
+  @ApiOperation({
+    summary: 'Create Season N+1 for a completed season (admin only)',
+  })
+  createNextSeason(
+    @Param('id') id: string,
+    @Body() body: CreateSeasonDto,
+  ) {
+    return this.poolsService.createNextSeason(id, body);
   }
 
   // ─── TX Builder Endpoints (non-custodial: return unsigned TX for wallet signing) ──
@@ -131,8 +175,17 @@ export class PoolsController {
 
   // ─── Read Endpoints (from DB cache, populated by event indexer) ───────────────
 
+  @Get(':id/rounds/active/eligible-winners')
+  @SkipThrottle()
+  @ApiOperation({
+    summary: 'Get eligible winner addresses for the active round (read-only)',
+  })
+  getEligibleWinners(@Param('id') id: string) {
+    return this.poolsService.getEligibleWinners(id);
+  }
+
   @Get(':id')
-  @SkipThrottle() // Allow polling for on-chain status without hitting rate limit
+  @SkipThrottle()
   @ApiOperation({ summary: 'Get pool details by ID (from cache)' })
   getPool(@Param('id') id: string) {
     return this.poolsService.getPool(id);
@@ -217,5 +270,17 @@ export class PoolsController {
       dto.upfrontPercent,
       dto.totalRounds,
     );
+  }
+
+  // ─── Admin ───────────────────────────────────────────────────────────────────
+
+  @Post('admin/configure-tiers')
+  @SkipThrottle()
+  @ApiOperation({
+    summary:
+      '[Admin] Enable tiers 1-3 on-chain via deployer signer (dev/test)',
+  })
+  configureTiers() {
+    return this.poolsService.configureTiersOnChain();
   }
 }

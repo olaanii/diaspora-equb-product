@@ -58,7 +58,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
-  Color _colorForType(String type) {
+  Color _colorForType(BuildContext context, String type) {
     switch (type) {
       case 'payout_received':
       case 'contribution_confirmed':
@@ -80,7 +80,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       case 'all_contributed':
         return AppTheme.primaryColor;
       default:
-        return AppTheme.textSecondary;
+        return AppTheme.textSecondaryColor(context);
     }
   }
 
@@ -151,15 +151,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     required bool showStatusChip,
     required bool isCritical,
   }) {
-    final chipBackground = showStatusChip
-        ? _statusBgColor(status)
-        : _kindBgColor(isCritical);
-    final chipTextColor = showStatusChip
-        ? _statusTextColor(status)
-        : _kindTextColor(isCritical);
-    final chipLabel = showStatusChip
-        ? status.toUpperCase()
-        : (isCritical ? 'ALERT' : 'INFO');
+    final chipBackground =
+        showStatusChip ? _statusBgColor(status) : _kindBgColor(isCritical);
+    final chipTextColor =
+        showStatusChip ? _statusTextColor(status) : _kindTextColor(isCritical);
+    final chipLabel =
+        showStatusChip ? status.toUpperCase() : (isCritical ? 'ALERT' : 'INFO');
 
     return showDialog<void>(
       context: context,
@@ -174,7 +171,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: chipBackground,
                   borderRadius: BorderRadius.circular(999),
@@ -191,18 +189,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               const SizedBox(height: 10),
               Text(
                 notification.body,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 14,
-                  color: AppTheme.textPrimary,
+                  color: AppTheme.textPrimaryColor(dialogContext),
                   height: 1.35,
                 ),
               ),
               const SizedBox(height: 10),
               Text(
                 _timeAgo(notification.createdAt),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
-                  color: AppTheme.textSecondary,
+                  color: AppTheme.textSecondaryColor(dialogContext),
                 ),
               ),
             ],
@@ -219,8 +217,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   String _groupTitle(NotificationGroupItem group) {
-    final poolSuffix =
-        group.poolId != null ? ' in Pool #${group.poolId}' : '';
+    final poolSuffix = group.poolId != null ? ' in Equb #${group.poolId}' : '';
 
     switch (group.type) {
       case 'round_closed':
@@ -230,9 +227,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       case 'contribution_confirmed':
         return '${group.count} contributions confirmed$poolSuffix';
       case 'pool_joined':
-        return '${group.count} pool join confirmations$poolSuffix';
+        return '${group.count} equb join confirmations$poolSuffix';
       case 'pool_created':
-        return '${group.count} pools created';
+        return '${group.count} equbs created';
       default:
         return '${group.count} grouped updates$poolSuffix';
     }
@@ -267,7 +264,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (context, index) {
                 final n = group.notifications[index];
-                final color = _colorForType(n.type);
+                final color = _colorForType(context, n.type);
                 return ListTile(
                   dense: true,
                   contentPadding:
@@ -292,14 +289,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     n.body,
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.grey[700],
+                      color: AppTheme.textSecondaryColor(context),
                     ),
                   ),
                   trailing: Text(
                     _timeAgo(n.createdAt),
                     style: TextStyle(
                       fontSize: 11,
-                      color: Colors.grey[500],
+                      color: AppTheme.textTertiaryColor(context),
                     ),
                   ),
                 );
@@ -317,15 +314,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
-  Widget _buildSectionHeader(String label) {
+  Widget _buildSectionHeader(BuildContext context, String label) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
       child: Text(
         label,
-        style: const TextStyle(
+        style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w700,
-          color: AppTheme.textTertiary,
+          color: AppTheme.textTertiaryColor(context),
         ),
       ),
     );
@@ -336,7 +333,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     NotificationProvider provider,
     AppNotification n,
   ) {
-    final color = _colorForType(n.type);
+    final color = _colorForType(context, n.type);
     final status = _statusForNotification(n);
     final showStatusChip = n.isTransaction;
     final isCritical = n.isCritical;
@@ -365,7 +362,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 13,
-          color: Colors.grey[600],
+          color: AppTheme.textSecondaryColor(context),
         ),
       ),
       trailing: Column(
@@ -379,12 +376,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               vertical: 2,
             ),
             decoration: BoxDecoration(
-              color:
-                  showStatusChip ? _statusBgColor(status) : _kindBgColor(isCritical),
+              color: showStatusChip
+                  ? _statusBgColor(status)
+                  : _kindBgColor(isCritical),
               borderRadius: BorderRadius.circular(999),
             ),
             child: Text(
-              showStatusChip ? status.toUpperCase() : (isCritical ? 'ALERT' : 'INFO'),
+              showStatusChip
+                  ? status.toUpperCase()
+                  : (isCritical ? 'ALERT' : 'INFO'),
               style: TextStyle(
                 fontSize: 10,
                 fontWeight: FontWeight.w700,
@@ -402,7 +402,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 _timeAgo(n.createdAt),
                 style: TextStyle(
                   fontSize: 11,
-                  color: Colors.grey[500],
+                  color: AppTheme.textTertiaryColor(context),
                 ),
               ),
               if (!n.read) ...[
@@ -442,7 +442,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     NotificationGroupItem group,
   ) {
     final latest = group.latestNotification;
-    final color = _colorForType(group.type);
+    final color = _colorForType(context, group.type);
     final unreadCount = group.notifications.where((n) => !n.read).length;
 
     return ListTile(
@@ -468,7 +468,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 13,
-          color: Colors.grey[600],
+          color: AppTheme.textSecondaryColor(context),
         ),
       ),
       trailing: Column(
@@ -482,7 +482,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               color: AppTheme.primaryColor.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(999),
             ),
-            child: Text(
+            child: const Text(
               'GROUP',
               style: TextStyle(
                 fontSize: 10,
@@ -496,13 +496,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             _timeAgo(latest.createdAt),
             style: TextStyle(
               fontSize: 11,
-              color: Colors.grey[500],
+              color: AppTheme.textTertiaryColor(context),
             ),
           ),
           if (unreadCount > 0)
             Text(
               '$unreadCount unread',
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 11,
                 color: AppTheme.primaryColor,
                 fontWeight: FontWeight.w600,
@@ -525,22 +525,31 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(gradient: AppTheme.backgroundGradient),
+      decoration: BoxDecoration(gradient: AppTheme.bgGradient(context)),
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
           title: const Text('Notifications'),
           actions: [
-            TextButton(
-              onPressed: () =>
-                  context.read<NotificationProvider>().markAllRead(),
-              child: const Text('Mark all read'),
+            Consumer<NotificationProvider>(
+              builder: (context, provider, _) => TextButton(
+                onPressed: provider.notifications.isEmpty
+                    ? null
+                    : () => provider.markAllRead(),
+                child: const Text('Mark all read'),
+              ),
             ),
           ],
         ),
         body: Consumer<NotificationProvider>(
           builder: (context, provider, _) {
             final sections = provider.displaySections;
+            final unreadCount = provider.notifications
+                .where((notification) => !notification.read)
+                .length;
+            final criticalCount = provider.notifications
+                .where((notification) => notification.isCritical)
+                .length;
 
             if (provider.isLoading && provider.notifications.isEmpty) {
               return const Center(child: CircularProgressIndicator());
@@ -548,20 +557,38 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
             if (sections.isEmpty) {
               return Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.notifications_none,
-                        size: 64, color: Colors.grey[400]),
-                    const SizedBox(height: 16),
-                    Text(
-                      'No notifications yet',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Colors.grey[500],
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 20),
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: AppTheme.cardColor(context),
+                    borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+                    boxShadow: AppTheme.subtleShadowFor(context),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.notifications_none_rounded,
+                        size: 56,
+                        color: AppTheme.textTertiaryColor(context),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 14),
+                      Text(
+                        'No notifications yet',
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Pool milestones, payout updates, wallet events, and critical alerts will collect here once activity begins.',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
                 ),
               );
             }
@@ -571,22 +598,30 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    child: _buildInboxSummary(
+                      context,
+                      unreadCount: unreadCount,
+                      criticalCount: criticalCount,
+                    ),
+                  ),
                   if (sections.critical.isNotEmpty) ...[
-                    _buildSectionHeader('Critical Alerts'),
+                    _buildSectionHeader(context, 'Critical Alerts'),
                     for (final item in sections.critical) ...[
                       _buildSingleTile(context, provider, item.notification),
                       const Divider(height: 1, indent: 72),
                     ],
                   ],
                   if (sections.latest.isNotEmpty) ...[
-                    _buildSectionHeader('Latest Updates'),
+                    _buildSectionHeader(context, 'Latest Updates'),
                     for (final item in sections.latest) ...[
                       _buildSingleTile(context, provider, item.notification),
                       const Divider(height: 1, indent: 72),
                     ],
                   ],
                   if (sections.grouped.isNotEmpty) ...[
-                    _buildSectionHeader('Earlier Summaries'),
+                    _buildSectionHeader(context, 'Earlier Summaries'),
                     for (final item in sections.grouped) ...[
                       if (item is NotificationSingleItem)
                         _buildSingleTile(context, provider, item.notification)
@@ -600,6 +635,58 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             );
           },
         ),
+      ),
+    );
+  }
+
+  Widget _buildInboxSummary(
+    BuildContext context, {
+    required int unreadCount,
+    required int criticalCount,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppTheme.cardColor(context),
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+        boxShadow: AppTheme.subtleShadowFor(context),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: AppTheme.primaryColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(
+              Icons.notifications_active_outlined,
+              color: AppTheme.primaryColor,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Inbox overview',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  unreadCount == 0
+                      ? 'You are caught up. New app and wallet events will appear here.'
+                      : '$unreadCount unread updates${criticalCount > 0 ? ' including $criticalCount critical alerts' : ''}.',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -1,12 +1,38 @@
+import 'package:flutter/foundation.dart';
+
 class AppConfig {
-  static const String apiBaseUrl = String.fromEnvironment(
+  static const String _apiBaseUrlFromEnv = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:3001/api',
+    defaultValue: '',
   );
 
-  /// Creditcoin RPC endpoint. Override via --dart-define=RPC_URL=...
-  /// Testnet: https://rpc.cc3-testnet.creditcoin.network  (102031)
-  /// Mainnet: https://mainnet3.creditcoin.network          (102030)
+  /// API base URL priority:
+  /// 1) `--dart-define=API_BASE_URL=...`
+  /// 2) Web default (`/api`) for same-origin deployments
+  /// 3) Non-web release fallback (`equb-db`)
+  /// 4) Local dev fallback
+  static String get apiBaseUrl {
+    final configured = _apiBaseUrlFromEnv.trim();
+    if (configured.isNotEmpty) {
+      return _normalizeApiBaseUrl(configured);
+    }
+    if (kIsWeb) {
+      return _normalizeApiBaseUrl('/api');
+    }
+    if (kReleaseMode) {
+      return _normalizeApiBaseUrl('https://equb-db.vercel.app/api');
+    }
+    return _normalizeApiBaseUrl('http://localhost:3001/api');
+  }
+
+  static String _normalizeApiBaseUrl(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty || trimmed.endsWith('/')) {
+      return trimmed;
+    }
+    return '$trimmed/';
+  }
+
   static const String rpcUrl = String.fromEnvironment(
     'RPC_URL',
     defaultValue: 'https://rpc.cc3-testnet.creditcoin.network',
@@ -25,8 +51,16 @@ class AppConfig {
       ? 'https://creditcoin.blockscout.com'
       : 'https://creditcoin-testnet.blockscout.com';
 
+  /// Human-readable network label.
+  static String get networkName =>
+      isMainnet ? 'Creditcoin Mainnet' : 'Creditcoin Testnet';
+
   /// Whether we are targeting mainnet (useful for UI badges / warnings).
   static bool get isMainnet => chainId == 102030;
+
+  /// Native token symbol based on compile-time chain ID.
+  /// Prefer NetworkProvider.nativeSymbol at runtime for dynamic switching.
+  static String get nativeSymbol => isMainnet ? 'CTC' : 'tCTC';
 
   /// USDC token address. Override via --dart-define=TEST_USDC_ADDRESS=0x...
   static const String usdcAddress = String.fromEnvironment(

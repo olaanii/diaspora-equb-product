@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
 import '../config/theme.dart';
+import '../providers/wallet_provider.dart';
+import '../widgets/desktop_dashboard_panels.dart';
+import '../widgets/desktop_layout.dart';
+import '../widgets/desktop_shell.dart';
 import 'home_screen.dart';
-import 'transactions_screen.dart';
-import 'withdraw_screen.dart';
+import 'pool_browser_screen.dart';
+import 'swap_screen.dart';
+import 'profile_screen.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -12,28 +19,39 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  int _currentIndex = 1; // Start on Home (center tab)
+  int _currentIndex = 0;
 
   final List<Widget> _screens = const [
-    TransactionsScreen(standalone: false),
     HomeScreen(),
-    WithdrawScreen(),
+    PoolBrowserScreen(),
+    SwapScreen(),
+    ProfileScreen(standalone: false),
   ];
 
-  /// Breakpoint for switching to wide (desktop/tablet) layout.
-  static const double _wideBreakpoint = 840.0;
+  static const double _wideBreakpoint = AppTheme.wideBreakpoint;
+  static const double _desktopBreakpoint = AppTheme.desktopBreakpoint;
+
+  static const List<_NavItemData> _navItems = [
+    _NavItemData(icon: Icons.home_rounded, label: 'Home'),
+    _NavItemData(icon: Icons.groups_rounded, label: 'Equbs'),
+    _NavItemData(icon: Icons.swap_horiz_rounded, label: 'Swap'),
+    _NavItemData(icon: Icons.person_rounded, label: 'Profile'),
+  ];
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(gradient: AppTheme.backgroundGradient),
+      decoration: BoxDecoration(gradient: AppTheme.bgGradient(context)),
       child: Scaffold(
         backgroundColor: Colors.transparent,
         body: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              if (constraints.maxWidth >= _desktopBreakpoint) {
+                return _buildDesktopLayout(constraints);
+              }
               if (constraints.maxWidth >= _wideBreakpoint) {
-                return _buildWideLayout(constraints);
+                return _buildWideLayout();
               }
               return _buildMobileLayout();
             },
@@ -41,7 +59,6 @@ class _MainShellState extends State<MainShell> {
         ),
         bottomNavigationBar: LayoutBuilder(
           builder: (context, constraints) {
-            // Hide bottom nav on wide screens (sidebar is used instead)
             if (MediaQuery.of(context).size.width >= _wideBreakpoint) {
               return const SizedBox.shrink();
             }
@@ -52,7 +69,6 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  // ── Mobile layout ──────────────────────────────────────────────────
   Widget _buildMobileLayout() {
     return IndexedStack(
       index: _currentIndex,
@@ -60,116 +76,89 @@ class _MainShellState extends State<MainShell> {
     );
   }
 
-  // ── Wide / desktop layout ──────────────────────────────────────────
-  Widget _buildWideLayout(BoxConstraints constraints) {
+  Widget _buildWideLayout() {
     return Row(
       children: [
-        // Sidebar navigation
-        _buildSideNav(),
-        // Main content area – scrollable columns
+        _buildWideSideNav(),
         Expanded(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 24),
-            child: _buildWideContent(constraints),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 10, 14, 14),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+              child: Container(
+                color: AppTheme.cardColor(context).withValues(alpha: 0.18),
+                child: IndexedStack(
+                  index: _currentIndex,
+                  children: _screens,
+                ),
+              ),
+            ),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildWideContent(BoxConstraints constraints) {
-    // Available width after sidebar (~72px)
-    final contentWidth = constraints.maxWidth - 72;
+  Widget _buildDesktopLayout(BoxConstraints constraints) {
+    final showDashboard = _currentIndex == 0;
 
-    // For very wide screens, show all three columns
-    if (contentWidth >= 900) {
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Left column: Home
-          Expanded(
-            flex: 3,
-            child: _screens[1], // HomeScreen
-          ),
-          const SizedBox(width: 12),
-          // Middle column: Transactions
-          Expanded(
-            flex: 3,
-            child: _screens[0], // TransactionsScreen
-          ),
-          const SizedBox(width: 12),
-          // Right column: Withdraw
-          Expanded(
-            flex: 3,
-            child: _screens[2], // WithdrawScreen
-          ),
-        ],
-      );
-    }
-
-    // For medium-wide, show two columns
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: _screens[_currentIndex],
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _screens[(_currentIndex + 1) % 3],
-        ),
-      ],
+    return DesktopAppShell(
+      activeSection: _sectionForIndex(_currentIndex),
+      onSectionSelected: (section) {
+        setState(() => _currentIndex = _indexForSection(section));
+      },
+      child: showDashboard
+          ? _buildDesktopDashboard()
+          : DesktopContent(
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 22),
+              child: IndexedStack(
+                index: _currentIndex,
+                children: _screens,
+              ),
+            ),
     );
   }
 
-  // ── Side navigation (wide screens) ─────────────────────────────────
-  Widget _buildSideNav() {
+  Widget _buildWideSideNav() {
     return Container(
-      width: 72,
-      padding: const EdgeInsets.symmetric(vertical: 20),
+      width: AppTheme.desktopRailWidth,
+      padding: const EdgeInsets.fromLTRB(12, 18, 12, 18),
       child: Column(
         children: [
-          // App logo
           Container(
-            width: 44,
-            height: 44,
+            width: 52,
+            height: 52,
             decoration: BoxDecoration(
-              color: AppTheme.darkButton,
-              borderRadius: BorderRadius.circular(14),
+              color: AppTheme.buttonColor(context),
+              borderRadius: BorderRadius.circular(16),
             ),
-            child: const Icon(Icons.spa_rounded, size: 22, color: Colors.white),
+            clipBehavior: Clip.antiAlias,
+            child: Image.asset(
+              'assets/logo.png',
+              fit: BoxFit.cover,
+            ),
           ),
-          const SizedBox(height: 32),
-          // Nav items
-          _buildSideNavItem(
-            index: 1,
-            icon: Icons.home_rounded,
-            isActive: _currentIndex == 1,
+          const SizedBox(height: 28),
+          Expanded(
+            child: Column(
+              children: [
+                for (int i = 0; i < _navItems.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 10),
+                  _buildWideSideNavItem(
+                    index: i,
+                    icon: _navItems[i].icon,
+                    isActive: _currentIndex == i,
+                  ),
+                ],
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          _buildSideNavItem(
-            index: 0,
-            icon: Icons.swap_horiz_rounded,
-            isActive: _currentIndex == 0,
-          ),
-          const SizedBox(height: 8),
-          _buildSideNavItem(
-            index: 2,
-            icon: Icons.account_balance_wallet_outlined,
-            isActive: _currentIndex == 2,
-          ),
-          const Spacer(),
-          // Bottom icons
-          _buildSideNavIcon(Icons.account_balance_wallet_outlined),
-          const SizedBox(height: 8),
-          _buildSideNavIcon(Icons.settings_outlined),
         ],
       ),
     );
   }
 
-  Widget _buildSideNavItem({
+  Widget _buildWideSideNavItem({
     required int index,
     required IconData icon,
     required bool isActive,
@@ -182,67 +171,94 @@ class _MainShellState extends State<MainShell> {
         width: 48,
         height: 48,
         decoration: BoxDecoration(
+          color: isActive ? AppTheme.buttonColor(context) : Colors.transparent,
           shape: BoxShape.circle,
-          color: isActive
-              ? AppTheme.darkButton
-              : AppTheme.cardWhite.withValues(alpha: 0.5),
           border: isActive
               ? null
               : Border.all(
-                  color: AppTheme.textPrimary.withValues(alpha: 0.1),
-                  width: 1.5,
+                  color: AppTheme.textPrimaryColor(context)
+                      .withValues(alpha: 0.08),
+                  width: 1,
                 ),
         ),
         child: Icon(
           icon,
           size: 22,
-          color: isActive ? Colors.white : AppTheme.textPrimary,
+          color: isActive
+              ? AppTheme.buttonTextColor(context)
+              : AppTheme.textPrimaryColor(context),
         ),
       ),
     );
   }
 
-  Widget _buildSideNavIcon(IconData icon) {
-    return Container(
-      width: 48,
-      height: 48,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: AppTheme.cardWhite.withValues(alpha: 0.4),
-        border: Border.all(
-          color: AppTheme.textPrimary.withValues(alpha: 0.08),
-          width: 1.5,
-        ),
+  DesktopShellSection _sectionForIndex(int index) {
+    switch (index) {
+      case 1:
+        return DesktopShellSection.equbs;
+      case 2:
+        return DesktopShellSection.swap;
+      case 3:
+        return DesktopShellSection.profile;
+      case 0:
+      default:
+        return DesktopShellSection.home;
+    }
+  }
+
+  int _indexForSection(DesktopShellSection section) {
+    switch (section) {
+      case DesktopShellSection.home:
+        return 0;
+      case DesktopShellSection.equbs:
+        return 1;
+      case DesktopShellSection.swap:
+        return 2;
+      case DesktopShellSection.profile:
+        return 3;
+    }
+  }
+
+  Widget _buildDesktopDashboard() {
+    return const DesktopContent(
+      padding: EdgeInsets.fromLTRB(20, 18, 20, 22),
+      maxWidth: 1520,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 6,
+            child: HomeScreen(desktopMode: DesktopHomeMode.leftPanel),
+          ),
+          SizedBox(width: AppTheme.desktopPanelGap),
+          Expanded(
+            flex: 5,
+            child: _DesktopCenterColumn(),
+          ),
+          SizedBox(width: AppTheme.desktopPanelGap),
+          Expanded(
+            flex: 3,
+            child: DesktopSupportRail(),
+          ),
+        ],
       ),
-      child: Icon(icon, size: 22, color: AppTheme.textPrimary),
     );
   }
 
-  // ── Bottom navigation (mobile) ─────────────────────────────────────
   Widget _buildBottomNav() {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(0, 8, 0, 12),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            _buildNavItem(
-              index: 0,
-              icon: Icons.swap_horiz_rounded,
-              isActive: _currentIndex == 0,
-            ),
-            const SizedBox(width: 2),
-            _buildNavItem(
-              index: 1,
-              icon: Icons.home_rounded,
-              isActive: _currentIndex == 1,
-            ),
-            const SizedBox(width: 2),
-            _buildNavItem(
-              index: 2,
-              icon: Icons.account_balance_wallet_outlined,
-              isActive: _currentIndex == 2,
-            ),
+            for (int i = 0; i < _navItems.length; i++)
+              _buildNavItem(
+                index: i,
+                icon: _navItems[i].icon,
+                label: _navItems[i].label,
+                isActive: _currentIndex == i,
+              ),
           ],
         ),
       ),
@@ -252,42 +268,87 @@ class _MainShellState extends State<MainShell> {
   Widget _buildNavItem({
     required int index,
     required IconData icon,
+    required String label,
     required bool isActive,
   }) {
+    final btnColor = AppTheme.buttonColor(context);
     return GestureDetector(
       onTap: () => setState(() => _currentIndex = index),
       behavior: HitTestBehavior.opaque,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: 52,
-        height: 52,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: isActive
-              ? AppTheme.darkButton
-              : AppTheme.cardWhite.withValues(alpha: 0.5),
-          border: isActive
-              ? null
-              : Border.all(
-                  color: AppTheme.textPrimary.withValues(alpha: 0.1),
-                  width: 1.5,
-                ),
-          boxShadow: isActive
-              ? [
-                  BoxShadow(
-                    color: AppTheme.darkButton.withValues(alpha: 0.2),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : null,
-        ),
-        child: Icon(
-          icon,
-          size: 24,
-          color: isActive ? Colors.white : AppTheme.textPrimary,
-        ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isActive
+                  ? btnColor
+                  : AppTheme.cardColor(context).withValues(alpha: 0.5),
+              border: isActive
+                  ? null
+                  : Border.all(
+                      color: AppTheme.textPrimaryColor(context)
+                          .withValues(alpha: 0.1),
+                      width: 1.5,
+                    ),
+              boxShadow: isActive
+                  ? [
+                      BoxShadow(
+                        color: btnColor.withValues(alpha: 0.2),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Icon(
+              icon,
+              size: 22,
+              color: isActive
+                  ? AppTheme.buttonTextColor(context)
+                  : AppTheme.textPrimaryColor(context),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+              color: isActive
+                  ? AppTheme.textPrimaryColor(context)
+                  : AppTheme.textTertiaryColor(context),
+            ),
+          ),
+        ],
       ),
     );
   }
+}
+
+class _DesktopCenterColumn extends StatelessWidget {
+  const _DesktopCenterColumn();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Column(
+      children: [
+        DesktopQuickTransferCard(),
+        SizedBox(height: AppTheme.desktopSectionGap),
+        Expanded(
+          child: HomeScreen(desktopMode: DesktopHomeMode.middlePanel),
+        ),
+      ],
+    );
+  }
+}
+
+class _NavItemData {
+  final IconData icon;
+  final String label;
+
+  const _NavItemData({required this.icon, required this.label});
 }

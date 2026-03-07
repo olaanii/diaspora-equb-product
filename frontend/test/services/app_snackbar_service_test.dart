@@ -34,6 +34,5 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
       expect(find.text('Second message'), findsNothing);
     });
-
   });
 }

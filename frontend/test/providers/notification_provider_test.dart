@@ -17,12 +17,13 @@ class FakeApiClient extends ApiClient {
     'nextCursor': null,
     'hasMore': false,
   };
-    final List<StreamController<String>> _sseControllers =
+  final List<StreamController<String>> _sseControllers =
       <StreamController<String>>[];
-    int streamOpenCount = 0;
+  int streamOpenCount = 0;
 
   @override
-  Future<List<dynamic>> getNotifications({int limit = 50, int offset = 0}) async {
+  Future<List<dynamic>> getNotifications(
+      {int limit = 50, int offset = 0}) async {
     return notificationsPayload;
   }
 
@@ -236,7 +237,8 @@ void main() {
       await api.close();
     });
 
-    test('reconnect recovery opens a new stream and receives new events', () async {
+    test('reconnect recovery opens a new stream and receives new events',
+        () async {
       final api = FakeApiClient();
       final provider = NotificationProvider(api);
 
@@ -278,7 +280,8 @@ void main() {
             'title': 'Baseline',
             'body': 'base',
             'read': false,
-            'createdAt': now.subtract(const Duration(minutes: 1)).toIso8601String(),
+            'createdAt':
+                now.subtract(const Duration(minutes: 1)).toIso8601String(),
           },
         ]
         ..unreadCountValue = 2;
@@ -369,7 +372,8 @@ void main() {
           'title': 'Round closed',
           'body': 'r1',
           'read': false,
-          'createdAt': now.subtract(const Duration(minutes: 20)).toIso8601String(),
+          'createdAt':
+              now.subtract(const Duration(minutes: 20)).toIso8601String(),
           'metadata': <String, dynamic>{'poolId': '5'},
         },
         <String, dynamic>{
@@ -378,7 +382,8 @@ void main() {
           'title': 'Round closed',
           'body': 'r2',
           'read': true,
-          'createdAt': now.subtract(const Duration(minutes: 21)).toIso8601String(),
+          'createdAt':
+              now.subtract(const Duration(minutes: 21)).toIso8601String(),
           'metadata': <String, dynamic>{'poolId': '5'},
         },
       ]);

@@ -5,6 +5,8 @@ import * as dotenv from 'dotenv';
 dotenv.config({ path: '../.env' });
 
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || '0x0000000000000000000000000000000000000000000000000000000000000001';
+const TESTNET_RPC_URL =
+  process.env.RPC_URL || 'https://rpc.cc3-testnet.creditcoin.network';
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -31,12 +33,12 @@ const config: HardhatUserConfig = {
       url: 'http://127.0.0.1:8545',
     },
     creditcoin: {
-      url: process.env.RPC_URL || 'https://rpc.creditcoin.org',
-      chainId: Number(process.env.CHAIN_ID) || 102030,
-      accounts: [DEPLOYER_PRIVATE_KEY],
+      url: process.env.MAINNET_RPC_URL || 'https://mainnet-rpc.creditcoin.org',
+      chainId: 102030,
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : [],
     },
     creditcoinTestnet: {
-      url: 'https://rpc.cc3-testnet.creditcoin.network',
+      url: TESTNET_RPC_URL,
       chainId: 102031,
       accounts: [DEPLOYER_PRIVATE_KEY],
     },

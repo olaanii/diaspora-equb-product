@@ -26,19 +26,16 @@ class WalletProvider extends ChangeNotifier {
   WalletProvider(this._api, this._walletService);
 
   /// The formatted balance for the currently selected token.
-  String get balance =>
-      _balances[_selectedToken]?['formatted'] ?? '0.00';
+  String get balance => _balances[_selectedToken]?['formatted'] ?? '0.00';
 
   /// The raw balance for the currently selected token.
-  String get rawBalance =>
-      _balances[_selectedToken]?['balance'] ?? '0';
+  String get rawBalance => _balances[_selectedToken]?['balance'] ?? '0';
 
   /// The currently selected token symbol.
   String get token => _selectedToken;
 
   /// Decimals for the currently selected token.
-  int get decimals =>
-      _balances[_selectedToken]?['decimals'] ?? 6;
+  int get decimals => _balances[_selectedToken]?['decimals'] ?? 6;
 
   /// All loaded token balances (for multi-token display).
   Map<String, Map<String, dynamic>> get allBalances => _balances;
@@ -72,14 +69,17 @@ class WalletProvider extends ChangeNotifier {
   }
 
   /// Load the balance for a specific token.
+  /// Pass [tokenAddress] for arbitrary ERC-20 contracts not in the backend's known list.
   Future<void> loadBalance(String walletAddress,
-      {String token = 'USDC'}) async {
+      {String token = 'USDC', String? tokenAddress}) async {
     _startLoading();
     _errorMessage = null;
 
     try {
-      final data = await _api.getTokenBalance(walletAddress, token: token);
-      _balances[token.toUpperCase()] = {
+      final data = await _api.getTokenBalance(walletAddress,
+          token: token, tokenAddress: tokenAddress);
+      final key = (data['symbol'] ?? token).toString().toUpperCase();
+      _balances[key] = {
         'formatted': data['formatted'] ?? '0.00',
         'balance': data['balance'] ?? '0',
         'decimals': data['decimals'] ?? 6,
@@ -102,16 +102,16 @@ class WalletProvider extends ChangeNotifier {
 
   /// Load transaction history for a wallet.
   /// Fetches transactions using optional server-side filters.
-  Future<void> loadTransactions(String walletAddress,
-      {
-      String token = 'ALL',
-      int limit = 50,
-      int? fromTimestamp,
-      int? toTimestamp,
-      String? direction,
-      String? status,
-      String? cursor,
-      }) async {
+  Future<void> loadTransactions(
+    String walletAddress, {
+    String token = 'ALL',
+    int limit = 50,
+    int? fromTimestamp,
+    int? toTimestamp,
+    String? direction,
+    String? status,
+    String? cursor,
+  }) async {
     _startLoading();
     _errorMessage = null;
     _transactions = [];
@@ -167,7 +167,8 @@ class WalletProvider extends ChangeNotifier {
 
     try {
       if (!_walletService.isConnected) {
-        _errorMessage = 'Wallet not connected. Please connect via WalletConnect.';
+        _errorMessage =
+            'Wallet not connected. Please connect via WalletConnect.';
         _stopLoading();
         return null;
       }
@@ -222,7 +223,8 @@ class WalletProvider extends ChangeNotifier {
 
     try {
       if (!_walletService.isConnected) {
-        _errorMessage = 'Wallet not connected. Connect via WalletConnect to sign.';
+        _errorMessage =
+            'Wallet not connected. Connect via WalletConnect to sign.';
         _stopLoading();
         return null;
       }
@@ -253,7 +255,8 @@ class WalletProvider extends ChangeNotifier {
 
     try {
       if (!_walletService.isConnected) {
-        _errorMessage = 'Wallet not connected. Connect via WalletConnect to sign.';
+        _errorMessage =
+            'Wallet not connected. Connect via WalletConnect to sign.';
         _stopLoading();
         return null;
       }
@@ -289,7 +292,8 @@ class WalletProvider extends ChangeNotifier {
 
     try {
       if (!_walletService.isConnected) {
-        _errorMessage = 'Wallet not connected. Connect via WalletConnect to sign.';
+        _errorMessage =
+            'Wallet not connected. Connect via WalletConnect to sign.';
         _stopLoading();
         return null;
       }
@@ -371,7 +375,8 @@ class WalletProvider extends ChangeNotifier {
 
     try {
       if (!_walletService.isConnected) {
-        _errorMessage = 'Wallet not connected. Connect via WalletConnect to sign.';
+        _errorMessage =
+            'Wallet not connected. Connect via WalletConnect to sign.';
         _stopLoading();
         return null;
       }
@@ -411,7 +416,8 @@ class WalletProvider extends ChangeNotifier {
 
     try {
       if (!_walletService.isConnected) {
-        _errorMessage = 'Wallet not connected. Connect via WalletConnect to sign.';
+        _errorMessage =
+            'Wallet not connected. Connect via WalletConnect to sign.';
         _stopLoading();
         return null;
       }
@@ -448,13 +454,18 @@ class WalletProvider extends ChangeNotifier {
     }));
   }
 
-  /// Load all wallet data at once (both USDC + USDT balances + all transactions).
-  Future<void> loadAll(String walletAddress, {String? token}) async {
-    await Future.wait([
+  /// Load all wallet data (USDC, USDT, optional native tCTC/CTC, transactions, rates).
+  /// Pass [nativeSymbol] (e.g. from NetworkProvider.nativeSymbol) to load native balance for pool status.
+  Future<void> loadAll(String walletAddress, {String? token, String? nativeSymbol}) async {
+    final tasks = <Future<void>>[
       loadBalance(walletAddress, token: 'USDC'),
       loadBalance(walletAddress, token: 'USDT'),
       loadTransactions(walletAddress),
       loadExchangeRates(),
-    ]);
+    ];
+    if (nativeSymbol != null && nativeSymbol.isNotEmpty) {
+      tasks.add(loadBalance(walletAddress, token: nativeSymbol));
+    }
+    await Future.wait(tasks);
   }
 }

@@ -5,12 +5,18 @@ const evmAddress = Joi.string()
   .default('0x0000000000000000000000000000000000000000');
 
 export const envValidationSchema = Joi.object({
-  // Database
+  // Database (use DATABASE_URL for Vercel Postgres / Neon, or individual vars)
+  DATABASE_URL: Joi.string().uri({ scheme: ['postgres', 'postgresql'] }).allow('').default(''),
   DATABASE_HOST: Joi.string().default('localhost'),
   DATABASE_PORT: Joi.number().default(5432),
   DATABASE_USERNAME: Joi.string().default('equb'),
-  DATABASE_PASSWORD: Joi.string().required(),
+  DATABASE_PASSWORD: Joi.when('DATABASE_URL', {
+    is: Joi.string().min(1),
+    then: Joi.string().allow('').optional(),
+    otherwise: Joi.string().required(),
+  }),
   DATABASE_NAME: Joi.string().default('diaspora_equb'),
+  DATABASE_SSL: Joi.boolean().default(false),
 
   // JWT (SRS NFR-2: 32+ chars in production)
   JWT_SECRET: Joi.string().min(32).required(),
@@ -23,6 +29,11 @@ export const envValidationSchema = Joi.object({
   ).default(''),
   FAYDA_API_KEY: Joi.string().allow('').default(''),
 
+  // Firebase Auth (optional until configured)
+  FIREBASE_PROJECT_ID: Joi.string().allow('').default(''),
+  FIREBASE_CLIENT_EMAIL: Joi.string().allow('').default(''),
+  FIREBASE_PRIVATE_KEY: Joi.string().allow('').default(''),
+
   // Blockchain
   RPC_URL: Joi.string().uri().required(),
   CHAIN_ID: Joi.number().default(102031),
@@ -34,10 +45,16 @@ export const envValidationSchema = Joi.object({
   COLLATERAL_VAULT_ADDRESS: evmAddress,
   PAYOUT_STREAM_ADDRESS: evmAddress,
   EQUB_POOL_ADDRESS: evmAddress,
+  EQUB_GOVERNOR_ADDRESS: evmAddress,
+  SWAP_ROUTER_ADDRESS: evmAddress,
+  ACHIEVEMENT_BADGE_ADDRESS: evmAddress,
 
   // Test Token Addresses
   TEST_USDC_ADDRESS: evmAddress,
   TEST_USDT_ADDRESS: evmAddress,
+
+  // Redis (optional — falls back to in-memory cache when not set)
+  REDIS_URL: Joi.string().default('redis://localhost:6379'),
 
   // Server
   PORT: Joi.number().default(3001),

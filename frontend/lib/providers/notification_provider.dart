@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import '../services/api_client.dart';
 import '../services/app_snackbar_service.dart';
@@ -412,8 +411,7 @@ class NotificationProvider extends ChangeNotifier {
       );
     }
 
-    final ordered = [..._notifications]
-      ..sort((a, b) {
+    final ordered = [..._notifications]..sort((a, b) {
         final dateCompare = b.createdAt.compareTo(a.createdAt);
         if (dateCompare != 0) return dateCompare;
         return b.id.compareTo(a.id);
@@ -558,7 +556,7 @@ class NotificationProvider extends ChangeNotifier {
 
       _notifications.removeWhere((n) => n.id == notification.id);
       _notifications.insert(0, notification);
-        _updateCursor(notification);
+      _updateCursor(notification);
       _unreadCount = _notifications.where((n) => !n.read).length;
       _maybeShowCriticalSnackbar(notification);
       notifyListeners();
