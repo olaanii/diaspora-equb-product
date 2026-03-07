@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import '../config/theme.dart';
-import '../providers/wallet_provider.dart';
-import '../widgets/desktop_dashboard_panels.dart';
 import '../widgets/desktop_layout.dart';
 import '../widgets/desktop_shell.dart';
 import 'home_screen.dart';
@@ -223,25 +220,7 @@ class _MainShellState extends State<MainShell> {
     return const DesktopContent(
       padding: EdgeInsets.fromLTRB(20, 18, 20, 22),
       maxWidth: 1520,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            flex: 6,
-            child: HomeScreen(desktopMode: DesktopHomeMode.leftPanel),
-          ),
-          SizedBox(width: AppTheme.desktopPanelGap),
-          Expanded(
-            flex: 5,
-            child: _DesktopCenterColumn(),
-          ),
-          SizedBox(width: AppTheme.desktopPanelGap),
-          Expanded(
-            flex: 3,
-            child: DesktopSupportRail(),
-          ),
-        ],
-      ),
+      child: HomeScreen(desktopMode: DesktopHomeMode.unifiedDesktop),
     );
   }
 
@@ -325,23 +304,6 @@ class _MainShellState extends State<MainShell> {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _DesktopCenterColumn extends StatelessWidget {
-  const _DesktopCenterColumn();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Column(
-      children: [
-        DesktopQuickTransferCard(),
-        SizedBox(height: AppTheme.desktopSectionGap),
-        Expanded(
-          child: HomeScreen(desktopMode: DesktopHomeMode.middlePanel),
-        ),
-      ],
     );
   }
 }

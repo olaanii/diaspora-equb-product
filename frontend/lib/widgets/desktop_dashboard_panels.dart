@@ -7,6 +7,7 @@ import '../config/theme.dart';
 import '../providers/network_provider.dart';
 import '../providers/notification_provider.dart';
 import '../providers/wallet_provider.dart';
+import '../services/wallet_service.dart';
 import 'desktop_layout.dart';
 
 class DesktopQuickTransferCard extends StatefulWidget {
@@ -186,146 +187,210 @@ class DesktopSupportRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final wallet = context.watch<WalletProvider>();
-    final notifications = context.watch<NotificationProvider>().unreadCount;
-    final network = context.watch<NetworkProvider>();
-    final balance = double.tryParse(wallet.balance) ?? 0.0;
-    final txList = wallet.transactions.take(3).toList();
-
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(0, 8, 0, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          DesktopCardSection(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Workspace Status',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: AppTheme.buttonColor(context)
-                            .withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        network.shortNetworkName.toUpperCase(),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.buttonColor(context),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                Text(
-                  '\$${_formatBalance(balance)}',
-                  style: Theme.of(context)
-                      .textTheme
-                      .headlineMedium
-                      ?.copyWith(fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Selected token: ${wallet.token}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _SupportMetric(
-                        label: 'Alerts',
-                        value: '$notifications',
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _SupportMetric(
-                        label: 'Rates',
-                        value: wallet.rates.isEmpty ? '--' : 'Live',
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
+          const DesktopWorkspaceStatusCard(),
           const SizedBox(height: AppTheme.desktopSectionGap),
-          DesktopCardSection(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Shortcuts',
+          const DesktopShortcutsCard(),
+          const SizedBox(height: AppTheme.desktopSectionGap),
+          const DesktopRecentActivityCard(),
+        ],
+      ),
+    );
+  }
+}
+
+class DesktopWorkspaceStatusCard extends StatelessWidget {
+  const DesktopWorkspaceStatusCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final wallet = context.watch<WalletProvider>();
+    final notifications = context.watch<NotificationProvider>().unreadCount;
+    final network = context.watch<NetworkProvider>();
+    final walletService = context.watch<WalletService>();
+    final balance = double.tryParse(wallet.balance) ?? 0.0;
+    final isConnected = walletService.isConnected;
+    final statusColor = isConnected ? AppTheme.positive : AppTheme.warningColor;
+
+    return DesktopCardSection(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Workspace Status',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
-                const SizedBox(height: 14),
-                _SupportActionTile(
-                  icon: Icons.notifications_outlined,
-                  title: 'Notifications',
-                  subtitle: notifications > 0
-                      ? '$notifications unread updates'
-                      : 'All caught up',
-                  onTap: () => context.push('/notifications'),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTheme.buttonColor(context).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
                 ),
-                const SizedBox(height: 10),
-                _SupportActionTile(
-                  icon: Icons.person_outline_rounded,
-                  title: 'Profile',
-                  subtitle: 'Manage wallet and account details',
-                  onTap: () => context.push('/profile'),
-                ),
-                const SizedBox(height: 10),
-                _SupportActionTile(
-                  icon: Icons.sync_rounded,
-                  title: 'Transactions',
-                  subtitle: 'Open the full transaction history',
-                  onTap: () => context.push('/transactions'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: AppTheme.desktopSectionGap),
-          DesktopCardSection(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Recent Activity',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 14),
-                if (txList.isEmpty)
-                  Text(
-                    wallet.isLoading
-                        ? 'Loading recent activity...'
-                        : 'No recent transactions yet',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  )
-                else
-                  Column(
-                    children: txList
-                        .map((tx) => Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: _RecentTxTile(tx: tx),
-                            ))
-                        .toList(),
+                child: Text(
+                  network.shortNetworkName.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.buttonColor(context),
                   ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: statusColor.withValues(alpha: 0.35)),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isConnected
+                      ? Icons.check_circle_rounded
+                      : Icons.account_balance_wallet_rounded,
+                  size: 18,
+                  color: statusColor,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    isConnected
+                        ? 'Wallet connected'
+                        : 'Connect wallet from profile',
+                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: AppTheme.textPrimaryColor(context),
+                        ),
+                  ),
+                ),
               ],
             ),
           ),
+          const SizedBox(height: 16),
+          Text(
+            '\$${_formatBalance(balance)}',
+            style: Theme.of(context)
+                .textTheme
+                .headlineMedium
+                ?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Selected token: ${wallet.token}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _SupportMetric(
+                  label: 'Alerts',
+                  value: '$notifications',
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _SupportMetric(
+                  label: 'Rates',
+                  value: wallet.rates.isEmpty ? '--' : 'Live',
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class DesktopShortcutsCard extends StatelessWidget {
+  const DesktopShortcutsCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final notifications = context.watch<NotificationProvider>().unreadCount;
+
+    return DesktopCardSection(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Shortcuts',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 14),
+          _SupportActionTile(
+            icon: Icons.notifications_outlined,
+            title: 'Notifications',
+            subtitle: notifications > 0
+                ? '$notifications unread updates'
+                : 'All caught up',
+            onTap: () => context.push('/notifications'),
+          ),
+          const SizedBox(height: 10),
+          _SupportActionTile(
+            icon: Icons.person_outline_rounded,
+            title: 'Profile',
+            subtitle: 'Manage wallet and account details',
+            onTap: () => context.push('/profile'),
+          ),
+          const SizedBox(height: 10),
+          _SupportActionTile(
+            icon: Icons.sync_rounded,
+            title: 'Transactions',
+            subtitle: 'Open the full transaction history',
+            onTap: () => context.push('/transactions'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class DesktopRecentActivityCard extends StatelessWidget {
+  const DesktopRecentActivityCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final wallet = context.watch<WalletProvider>();
+    final txList = wallet.transactions.take(3).toList();
+
+    return DesktopCardSection(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Recent Activity',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 14),
+          if (txList.isEmpty)
+            Text(
+              wallet.isLoading
+                  ? 'Loading recent activity...'
+                  : 'No recent transactions yet',
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            Column(
+              children: txList
+                  .map((tx) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _RecentTxTile(tx: tx),
+                      ))
+                  .toList(),
+            ),
         ],
       ),
     );

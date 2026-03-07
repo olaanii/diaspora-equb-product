@@ -9,10 +9,10 @@ import '../providers/network_provider.dart';
 import '../providers/wallet_provider.dart';
 import '../providers/notification_provider.dart';
 import '../services/api_client.dart';
-import '../services/wallet_service.dart';
+import '../widgets/desktop_dashboard_panels.dart';
 import '../widgets/desktop_layout.dart';
 
-enum DesktopHomeMode { full, leftPanel, middlePanel }
+enum DesktopHomeMode { full, leftPanel, middlePanel, unifiedDesktop }
 
 class HomeScreen extends StatefulWidget {
   final DesktopHomeMode desktopMode;
@@ -187,6 +187,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
         final mode = widget.desktopMode;
 
+        if (mode == DesktopHomeMode.unifiedDesktop) {
+          return _buildUnifiedDesktopContent(context, wallet, auth);
+        }
         if (mode == DesktopHomeMode.leftPanel) {
           return _buildLeftPanelContent(context, wallet, auth);
         }
@@ -365,8 +368,6 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildDesktopPanelHeader(context, auth),
-          const SizedBox(height: 20),
           const DesktopSectionTitle(
             title: 'Dashboard Overview',
             subtitle:
@@ -376,6 +377,166 @@ class _HomeScreenState extends State<HomeScreen> {
           _buildDesktopOverviewGrid(context, wallet, auth),
           const SizedBox(height: AppTheme.desktopSectionGap),
           _buildDesktopPerformanceGrid(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnifiedDesktopContent(
+      BuildContext context, WalletProvider wallet, AuthProvider auth) {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const DesktopSectionTitle(
+            title: 'Dashboard Overview',
+            subtitle:
+                'Balance, actions, activity, and Equb momentum aligned in one desktop workspace grid.',
+          ),
+          const SizedBox(height: 16),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 1320
+                  ? 3
+                  : constraints.maxWidth >= 920
+                      ? 2
+                      : 1;
+              final gap = AppTheme.desktopPanelGap;
+              final columnWidth =
+                  (constraints.maxWidth - ((columns - 1) * gap)) / columns;
+
+              double spanWidth(int span) =>
+                  (columnWidth * span) + (gap * (span - 1));
+
+              final balanceModule = DesktopCardSection(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    _buildBalanceCard(context, wallet),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                      child: _buildTokenSelector(context, wallet, auth),
+                    ),
+                  ],
+                ),
+              );
+
+              final actionsModule = DesktopCardSection(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Quick Actions',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Your most-used wallet and Equb shortcuts',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 18),
+                    _buildQuickActions(
+                      context,
+                      forceGrid: true,
+                      compactCards: true,
+                    ),
+                  ],
+                ),
+              );
+
+              final performanceModule = DesktopCardSection(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Global Equb Performance',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        GestureDetector(
+                          onTap: () => context.push('/equb-insights'),
+                          child: Text(
+                            'See All',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: AppTheme.textTertiaryColor(context),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    _buildTypeChips(context),
+                    const SizedBox(height: 16),
+                    _buildMetricsRow(context),
+                    const SizedBox(height: 16),
+                    _buildPerformanceChart(context),
+                  ],
+                ),
+              );
+
+              final trendsModule = DesktopCardSection(
+                child: _buildTrendingEqubs(context),
+              );
+
+              final leaderboardModule = DesktopCardSection(
+                child: _buildLeaderboard(context),
+              );
+
+              final transactionsModule = DesktopCardSection(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const DesktopSectionTitle(
+                      title: 'Transactions Overview',
+                      subtitle: 'Settlement history and recent wallet movements',
+                    ),
+                    const SizedBox(height: 16),
+                    _buildTransactionsSection(context, wallet),
+                  ],
+                ),
+              );
+
+              final items = <Widget>[
+                SizedBox(
+                  width: spanWidth(columns == 1 ? 1 : 2),
+                  child: balanceModule,
+                ),
+                SizedBox(width: spanWidth(1), child: actionsModule),
+                SizedBox(width: spanWidth(1), child: const DesktopWorkspaceStatusCard()),
+                SizedBox(
+                  width: spanWidth(columns == 1 ? 1 : 2),
+                  child: const DesktopQuickTransferCard(),
+                ),
+                SizedBox(width: spanWidth(1), child: const DesktopShortcutsCard()),
+                SizedBox(
+                  width: spanWidth(columns == 1 ? 1 : 2),
+                  child: performanceModule,
+                ),
+                SizedBox(width: spanWidth(1), child: leaderboardModule),
+                SizedBox(width: spanWidth(1), child: trendsModule),
+                SizedBox(width: spanWidth(1), child: const DesktopRecentActivityCard()),
+                SizedBox(
+                  width: spanWidth(columns == 1 ? 1 : 2),
+                  child: transactionsModule,
+                ),
+              ];
+
+              return Wrap(
+                spacing: gap,
+                runSpacing: AppTheme.desktopSectionGap,
+                children: items,
+              );
+            },
+          ),
         ],
       ),
     );
@@ -555,84 +716,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         );
       },
-    );
-  }
-
-  Widget _buildDesktopPanelHeader(BuildContext context, AuthProvider auth) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.end,
-      children: [
-        Flexible(
-          child: Wrap(
-            alignment: WrapAlignment.end,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            runSpacing: 8,
-            spacing: 10,
-            children: [
-              _buildWalletStatusChip(context),
-              _buildNetworkToggle(context),
-              _buildNotificationBell(context),
-              GestureDetector(
-                onTap: _loadWalletData,
-                child: _buildHeaderIcon(context, Icons.sync_rounded),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildWalletStatusChip(BuildContext context) {
-    final walletService = context.watch<WalletService>();
-    final isConnected = walletService.isConnected;
-    final address = walletService.walletAddress;
-    final color = isConnected ? AppTheme.positive : AppTheme.warningColor;
-    final label = isConnected
-        ? '${address!.substring(0, 6)}...${address.substring(address.length - 4)}'
-        : 'Connect wallet';
-    final subtitle = isConnected ? 'Wallet connected' : 'Open profile to connect';
-
-    return GestureDetector(
-      onTap: () => context.push('/profile'),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: color.withValues(alpha: 0.45)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              isConnected ? Icons.check_circle_rounded : Icons.account_balance_wallet_rounded,
-              size: 18,
-              color: color,
-            ),
-            const SizedBox(width: 10),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: AppTheme.textPrimaryColor(context),
-                        fontWeight: FontWeight.w700,
-                      ),
-                ),
-                Text(
-                  subtitle,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppTheme.textSecondaryColor(context),
-                      ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
     );
   }
 
