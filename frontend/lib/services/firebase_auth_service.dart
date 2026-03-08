@@ -155,7 +155,7 @@ class FirebaseAuthService {
   void _assertConfigured() {
     if (!isConfigured) {
       throw StateError(
-        'Firebase is not configured. Add runtime dart-defines or generate native Firebase options with FlutterFire.',
+        'Firebase is not configured. Load Firebase values from local or deployment env and pass them as dart-defines before starting the app.',
       );
     }
   }

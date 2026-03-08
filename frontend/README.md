@@ -6,12 +6,9 @@ Flutter mobile app for Diaspora Equb (DeFi).
 
 Email/password and Google sign-in require Firebase config.
 
-This repo now includes generated native Firebase config:
+Firebase config is env-only. Real Firebase values must not be committed.
 
-- `lib/firebase_options.dart`
-- `android/app/google-services.json`
-
-That means Android can run without passing the full Firebase app config through dart-defines. Web still commonly uses runtime dart-defines when you want to override the checked-in config.
+Keep real values in the repository root `.env` or your deployment secret store, then pass them into Flutter as dart-defines during build or run time.
 
 Required dart-defines:
 
@@ -34,28 +31,46 @@ Current Android application ID in this repo:
 
 - `com.example.diaspora_equb_frontend`
 
-Current generated Firebase app IDs in this repo:
-
-- Web: `1:608960233059:web:5a0bf553da2f8c6d170256`
-- Android: `1:608960233059:android:0ec3ac064fb12375170256`
-- iOS: `1:608960233059:ios:36e6ab1e90b3b859170256`
-- Windows: `1:608960233059:web:4d0706e55e3e43c9170256`
-
 Firebase app mapping:
 
 - Web: create a Firebase Web app and use its config for browser sign-in.
-- Android: the repo already contains `android/app/google-services.json` for package name `com.example.diaspora_equb_frontend`.
+- Android: create a Firebase Android app for package name `com.example.diaspora_equb_frontend` and keep any generated native config local only.
 - Google sign-in on Android should use both:
   - `FIREBASE_ANDROID_CLIENT_ID`: optional override if you want to force a native client ID at runtime
   - `GOOGLE_WEB_CLIENT_ID`: the server client ID used during Google sign-in
 
-Example web run:
+Example run using the root `.env` file:
 
 ```bash
 flutter run -d chrome \
+  --dart-define-from-file=../.env \
+  --dart-define=API_BASE_URL=http://localhost:3001/api \
+  --dart-define=WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id
+```
+
+Example web run with explicit Firebase values:
+
+```bash
+flutter run -d chrome \
+  --dart-define-from-file=../.env \
+  --dart-define=API_BASE_URL=http://10.0.2.2:3001/api \
+  --dart-define=WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id \
+  --dart-define=RPC_URL=https://rpc.cc3-testnet.creditcoin.network
+```
+
+Example Android run with explicit Firebase values:
+
+```bash
+flutter run -d android \
   --dart-define=API_BASE_URL=http://localhost:3001/api \
   --dart-define=WALLETCONNECT_PROJECT_ID=your_walletconnect_project_id \
   --dart-define=FIREBASE_API_KEY=your_api_key \
+  --dart-define=FIREBASE_API_KEY=your_api_key \
+  --dart-define=FIREBASE_APP_ID=your_android_app_id \
+  --dart-define=FIREBASE_MESSAGING_SENDER_ID=your_sender_id \
+  --dart-define=FIREBASE_PROJECT_ID=your_project_id \
+  --dart-define=FIREBASE_STORAGE_BUCKET=your_project.firebasestorage.app \
+  --dart-define=FIREBASE_ANDROID_CLIENT_ID=your_android_client_id.apps.googleusercontent.com \
   --dart-define=FIREBASE_APP_ID=your_app_id \
   --dart-define=FIREBASE_MESSAGING_SENDER_ID=your_sender_id \
   --dart-define=FIREBASE_PROJECT_ID=your_project_id \
@@ -64,7 +79,7 @@ flutter run -d chrome \
   --dart-define=GOOGLE_WEB_CLIENT_ID=your_web_client_id.apps.googleusercontent.com
 ```
 
-Example Android run:
+- Keep generated Firebase files such as `google-services.json`, `GoogleService-Info.plist`, `firebase.json`, and `firebase_options.dart` out of git.
 
 ```bash
 flutter run -d android \
@@ -79,7 +94,7 @@ Android notes:
 - Use `http://10.0.2.2:3001/api` for the backend when running on the Android emulator.
 - Use your machine's LAN IP instead of `localhost` when running on a physical Android device.
 - If you change the Android package name, update both Firebase and `android/app/build.gradle.kts` to match.
-- Because `firebase_options.dart` and `google-services.json` are already present, the exact Android run command above does not need the full Firebase app config defines.
+- Pass the full Firebase app config through `--dart-define` values for every local build and deployment target.
 
 Backend Firebase session exchange also requires these backend env vars:
 

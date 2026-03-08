@@ -1,7 +1,5 @@
 import 'package:firebase_core/firebase_core.dart';
 
-import '../firebase_options.dart';
-
 class AppFirebaseConfig {
   static const String apiKey = String.fromEnvironment(
     'FIREBASE_API_KEY',
@@ -48,39 +46,30 @@ class AppFirebaseConfig {
     defaultValue: '',
   );
 
-  static bool get hasRuntimeOverride =>
+  static bool get isConfigured =>
       apiKey.isNotEmpty &&
       appId.isNotEmpty &&
       messagingSenderId.isNotEmpty &&
       projectId.isNotEmpty;
 
-  static bool get hasGeneratedOptions {
-    try {
-      DefaultFirebaseOptions.currentPlatform;
-      return true;
-    } on UnsupportedError {
-      return false;
-    }
-  }
-
-  static bool get isConfigured => hasRuntimeOverride || hasGeneratedOptions;
-
   static FirebaseOptions get currentOptions {
-    if (hasRuntimeOverride) {
-      return FirebaseOptions(
-        apiKey: apiKey,
-        appId: appId,
-        messagingSenderId: messagingSenderId,
-        projectId: projectId,
-        authDomain: authDomain.isEmpty ? null : authDomain,
-        storageBucket: storageBucket.isEmpty ? null : storageBucket,
-        iosBundleId: iosBundleId.isEmpty ? null : iosBundleId,
-        androidClientId: androidClientId.isEmpty ? null : androidClientId,
-        iosClientId: iosClientId.isEmpty ? null : iosClientId,
-        measurementId: measurementId.isEmpty ? null : measurementId,
+    if (!isConfigured) {
+      throw StateError(
+        'Firebase is not configured. Provide Firebase values through env-backed dart-defines before building or running the app.',
       );
     }
 
-    return DefaultFirebaseOptions.currentPlatform;
+    return FirebaseOptions(
+      apiKey: apiKey,
+      appId: appId,
+      messagingSenderId: messagingSenderId,
+      projectId: projectId,
+      authDomain: authDomain.isEmpty ? null : authDomain,
+      storageBucket: storageBucket.isEmpty ? null : storageBucket,
+      iosBundleId: iosBundleId.isEmpty ? null : iosBundleId,
+      androidClientId: androidClientId.isEmpty ? null : androidClientId,
+      iosClientId: iosClientId.isEmpty ? null : iosClientId,
+      measurementId: measurementId.isEmpty ? null : measurementId,
+    );
   }
 }
