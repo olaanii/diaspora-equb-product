@@ -172,27 +172,28 @@ class _LandingTopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final baseGold = HSLColor.fromColor(AppTheme.accentYellow);
-    final logoCardColor = baseGold.withSaturation(baseGold.saturation * 0.2).toColor();
+    final logoCardColor =
+        baseGold.withSaturation(baseGold.saturation * 0.2).toColor();
 
     return Row(
       children: [
         Container(
-          width: 182,
-          height: 74,
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          width: 102,
+          height: 54,
+          padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 1),
           decoration: BoxDecoration(
             color: logoCardColor,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(30),
             border: Border.all(
-              color: AppTheme.accentYellow.withValues(alpha: 0.34),
+              color: AppTheme.accentYellow,
             ),
           ),
           child: Center(
             child: Image.asset(
               'assets/logo.png',
               fit: BoxFit.contain,
-              width: 174,
-              height: 66,
+              width: 1240,
+              height: 800,
             ),
           ),
         ),
