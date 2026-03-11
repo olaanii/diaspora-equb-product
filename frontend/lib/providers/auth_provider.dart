@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show ChangeNotifier, debugPrint;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:sentry_flutter/sentry_flutter.dart';
 
 import '../config/app_config.dart';
 import '../services/api_client.dart';
@@ -23,6 +24,8 @@ enum AuthStatus {
 class AuthProvider extends ChangeNotifier {
   static const _onboardingKey = 'onboarding_complete';
   static const _storage = FlutterSecureStorage();
+  static const int _walletDriftWarnThreshold = 3;
+  static const int _walletDriftRollbackThreshold = 5;
 
   final ApiClient _api;
   final WalletService _walletService;
@@ -43,13 +46,18 @@ class AuthProvider extends ChangeNotifier {
   bool _hasCompletedOnboarding = false;
   bool _requireTransactionConfirmation = true;
   List<StoredWalletSlot> _rememberedWallets = const [];
+  int _walletDriftEvents = 0;
+  bool _walletDriftRollbackRecommended = false;
+  String? _lastWalletDriftSignature;
 
   AuthProvider(
     this._api,
     this._walletService,
     this._firebaseAuthService,
     this._profilePreferencesService,
-  );
+  ) {
+    _walletService.addListener(_handleWalletServiceChange);
+  }
 
   AuthStatus get status => _status;
   String? get identityHash => _identityHash;
@@ -66,7 +74,9 @@ class AuthProvider extends ChangeNotifier {
       _status == AuthStatus.emailVerificationRequired;
   bool get isFirebaseConfigured => _firebaseAuthService.isConfigured;
   bool get requireTransactionConfirmation => _requireTransactionConfirmation;
-    List<StoredWalletSlot> get rememberedWallets =>
+  int get walletDriftEvents => _walletDriftEvents;
+  bool get walletDriftRollbackRecommended => _walletDriftRollbackRecommended;
+  List<StoredWalletSlot> get rememberedWallets =>
       List.unmodifiable(_rememberedWallets);
   bool get hasBoundWallet =>
       _walletAddress != null && _walletAddress!.trim().isNotEmpty;
@@ -96,6 +106,10 @@ class AuthProvider extends ChangeNotifier {
 
   /// Access the wallet service for signing transactions.
   WalletService get walletService => _walletService;
+
+  void _handleWalletServiceChange() {
+    _trackWalletDrift('wallet_service_update');
+  }
 
   Future<void> completeOnboarding() async {
     _hasCompletedOnboarding = true;
@@ -263,7 +277,8 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> renameRememberedWallet(String walletAddress, String label) async {
+  Future<void> renameRememberedWallet(
+      String walletAddress, String label) async {
     final normalized = walletAddress.trim().toLowerCase();
     if (normalized.isEmpty) {
       return;
@@ -318,7 +333,7 @@ class AuthProvider extends ChangeNotifier {
 
   /// Bypass Fayda verification for testing.
   /// Dev login always uses the fixed dev wallet (DE1057) that joined the tier-0 pool,
-  /// so pool membership and authorized API calls work. Does not use MetaMask for auth.
+  /// so pool membership and authorized API calls work.
   Future<void> skipFaydaForTesting() async {
     _status = AuthStatus.loading;
     _errorMessage = null;
@@ -347,7 +362,7 @@ class AuthProvider extends ChangeNotifier {
   bool get isDevBypassEnabled => AppConfig.devBypassFayda;
 
   /// Wallet-only login using Sign-In with Ethereum:
-  /// Step 1: Connect MetaMask → get wallet address
+  /// Step 1: Connect wallet → get wallet address
   Future<void> connectWallet({
     WalletConnectionMethod method = WalletConnectionMethod.auto,
   }) async {
@@ -378,7 +393,7 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Step 2: Sign the challenge with MetaMask
+  /// Step 2: Sign the challenge with wallet
   Future<void> signWalletChallenge() async {
     if (_walletAddress == null) {
       _errorMessage = 'No wallet address available';
@@ -396,7 +411,7 @@ class AuthProvider extends ChangeNotifier {
       final challenge = await _api.walletChallenge(_walletAddress!);
       final message = challenge['message'] as String;
 
-      // Sign the challenge with MetaMask
+      // Sign the challenge with the connected wallet
 
       final signature = await _walletService.personalSign(message);
       if (signature == null) {
@@ -431,7 +446,7 @@ class AuthProvider extends ChangeNotifier {
     await connectWallet();
   }
 
-  /// Bind wallet using WalletConnect: connect the user's real wallet,
+  /// Bind wallet: connect the user's wallet,
   /// then bind the wallet address to their identity on the backend.
   Future<void> connectAndBindWallet() async {
     if (_identityHash == null) {
@@ -444,19 +459,21 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // 1. Connect via WalletConnect (user approves in their wallet app)
+      // 1. Connect wallet (user approves in their wallet app)
       final address = await _walletService.connect();
       if (address == null) {
-        _errorMessage =
-            _walletService.errorMessage ?? 'Wallet connection failed';
+        _errorMessage = _walletService.errorMessage ??
+            'Wallet connection failed. On web/desktop, use manual wallet binding.';
         notifyListeners();
         return;
       }
 
-      // 2. Bind the wallet address from WalletConnect to the identity
-      final response = await _api.bindWallet(_identityHash!, address);
+      // 2. Issue bind challenge, sign it, and verify before binding
+      final response = await _bindWalletWithSignature(address);
       if (response['status'] == 'bound') {
-        await _applyAuthenticatedSession(response);
+        await _applyAuthenticatedSession(
+          _withPreferredWallet(response, address),
+        );
         await _rememberWallet(address);
       } else {
         _errorMessage = 'Wallet binding failed: ${response['status']}';
@@ -480,9 +497,26 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final response = await _api.bindWallet(_identityHash!, walletAddress);
+      final connectedAddress = await _walletService.connect();
+      if (connectedAddress == null) {
+        _errorMessage = _walletService.errorMessage ??
+            'Connect the wallet you want to bind, then try again.';
+        notifyListeners();
+        return;
+      }
+
+      if (connectedAddress.toLowerCase() != walletAddress.toLowerCase()) {
+        _errorMessage =
+            'Connected wallet does not match pasted address. Switch wallet account and retry.';
+        notifyListeners();
+        return;
+      }
+
+      final response = await _bindWalletWithSignature(walletAddress);
       if (response['status'] == 'bound') {
-        await _applyAuthenticatedSession(response);
+        await _applyAuthenticatedSession(
+          _withPreferredWallet(response, walletAddress),
+        );
         await _rememberWallet(walletAddress);
       } else {
         _errorMessage = 'Wallet binding failed: ${response['status']}';
@@ -592,7 +626,7 @@ class AuthProvider extends ChangeNotifier {
       _displayName = displayName ?? _displayName;
 
       // Keep DE1057 as-is on restore so pool membership and auth stay correct.
-      // Do not replace with MetaMask address.
+      // Do not replace with any transient session wallet.
 
       if (_walletAddress != null && _walletAddress!.isNotEmpty) {
         _status = AuthStatus.walletBound;
@@ -724,13 +758,45 @@ class AuthProvider extends ChangeNotifier {
   String _localFirebaseIdentityHash(User user) {
     final source = 'firebase:${user.uid}';
     final bytes = utf8.encode(source);
-    final hex = bytes
-        .map((value) => value.toRadixString(16).padLeft(2, '0'))
-        .join();
+    final hex =
+        bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
     final normalized = hex.length >= 64
         ? hex.substring(0, 64)
         : (hex + '0' * (64 - hex.length));
     return '0x$normalized';
+  }
+
+  Future<Map<String, dynamic>> _bindWalletWithSignature(
+    String walletAddress,
+  ) async {
+    final challenge =
+        await _api.bindWalletChallenge(_identityHash!, walletAddress);
+    final message = challenge['message'] as String;
+
+    final signature = await _walletService.personalSign(message);
+    if (signature == null) {
+      throw StateError(
+        _walletService.errorMessage ?? 'Wallet bind signature rejected.',
+      );
+    }
+
+    return _api.bindWalletVerify(
+      identityHash: _identityHash!,
+      walletAddress: walletAddress,
+      message: message,
+      signature: signature,
+    );
+  }
+
+  Map<String, dynamic> _withPreferredWallet(
+    Map<String, dynamic> response,
+    String walletAddress,
+  ) {
+    return {
+      ...response,
+      'walletAddress': walletAddress,
+      'walletBindingStatus': response['walletBindingStatus'] ?? 'bound',
+    };
   }
 
   Future<void> _applyAuthenticatedSession(
@@ -764,9 +830,66 @@ class AuthProvider extends ChangeNotifier {
       await _rememberWallet(_walletAddress!);
     }
 
+    _trackWalletDrift('apply_session');
+
     if (notifyAtEnd) {
       notifyListeners();
     }
+  }
+
+  void _trackWalletDrift(String source) {
+    final boundWallet = _walletAddress?.trim().toLowerCase();
+    final connectedWallet = _walletService.walletAddress?.trim().toLowerCase();
+
+    if (boundWallet == null ||
+        boundWallet.isEmpty ||
+        connectedWallet == null ||
+        connectedWallet.isEmpty ||
+        boundWallet == connectedWallet) {
+      _lastWalletDriftSignature = null;
+      return;
+    }
+
+    final signature = '$boundWallet|$connectedWallet|$source';
+    if (_lastWalletDriftSignature == signature) {
+      return;
+    }
+    _lastWalletDriftSignature = signature;
+
+    _walletDriftEvents += 1;
+    final rollbackNow = _walletDriftEvents >= _walletDriftRollbackThreshold;
+    if (rollbackNow && !_walletDriftRollbackRecommended) {
+      _walletDriftRollbackRecommended = true;
+      _errorMessage =
+          'Wallet mismatch safety threshold reached. Re-authentication is recommended before signing additional transactions.';
+      notifyListeners();
+    }
+
+    Sentry.captureMessage(
+      'wallet_drift_detected',
+      level: rollbackNow ? SentryLevel.error : SentryLevel.warning,
+      withScope: (scope) {
+        scope.setTag('telemetry.type', 'wallet_drift');
+        scope.setTag('telemetry.source', source);
+        scope.setTag(
+          'telemetry.rollback_recommended',
+          _walletDriftRollbackRecommended ? 'true' : 'false',
+        );
+        scope.setTag(
+          'telemetry.threshold_level',
+          _walletDriftEvents >= _walletDriftRollbackThreshold
+              ? 'rollback'
+              : (_walletDriftEvents >= _walletDriftWarnThreshold
+                  ? 'warning'
+                  : 'observe'),
+        );
+        scope.setContexts('wallet_drift', {
+          'walletDriftEvents': _walletDriftEvents,
+          'boundWallet': boundWallet,
+          'connectedWallet': connectedWallet,
+        });
+      },
+    );
   }
 
   StoredProfilePreferences _currentStoredProfile() {
@@ -780,7 +903,8 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> _persistStoredProfile() async {
-    final saved = await _profilePreferencesService.save(_currentStoredProfile());
+    final saved =
+        await _profilePreferencesService.save(_currentStoredProfile());
     _applyStoredProfile(saved);
   }
 
@@ -824,5 +948,11 @@ class AuthProvider extends ChangeNotifier {
 
     _rememberedWallets = updated.take(6).toList(growable: false);
     await _persistStoredProfile();
+  }
+
+  @override
+  void dispose() {
+    _walletService.removeListener(_handleWalletServiceChange);
+    super.dispose();
   }
 }

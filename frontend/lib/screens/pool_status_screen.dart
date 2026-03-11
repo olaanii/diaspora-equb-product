@@ -219,7 +219,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     if (!wallet.isConnected) {
       debugPrint('[Contribute] Wallet not connected, calling connect()...');
       AppSnackbarService.instance.info(
-        message: 'Connecting to MetaMask...',
+        message: 'Connecting wallet...',
         dedupeKey: 'pool_status_connecting_wallet',
         duration: const Duration(seconds: 2),
       );
@@ -230,7 +230,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       if (addr == null) {
         AppSnackbarService.instance.error(
           message: wallet.errorMessage ??
-              'MetaMask connection failed. Make sure MetaMask is installed and unlocked.',
+              'Wallet connection failed. Make sure your wallet is available and unlocked.',
           dedupeKey: 'pool_status_wallet_not_connected',
           duration: const Duration(seconds: 5),
         );
@@ -304,7 +304,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       debugPrint('[Contribute] FAILED: $err');
       AppSnackbarService.instance.error(
         message:
-            '$err\n\nMake sure you are a member of this equb, have enough $poolSymbol balance, and approve the transaction in MetaMask.',
+            '$err\n\nMake sure you are a member of this equb, have enough $poolSymbol balance, and approve the transaction in your wallet.',
         dedupeKey: 'pool_status_contribute_failed',
         duration: const Duration(seconds: 8),
       );
@@ -338,7 +338,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       if (addr == null) {
         AppSnackbarService.instance.error(
           message: wallet.errorMessage ??
-              'MetaMask connection failed. Make sure MetaMask is installed and unlocked.',
+              'Wallet connection failed. Make sure your wallet is available and unlocked.',
           dedupeKey: 'pool_status_wallet_not_connected_join',
           duration: const Duration(seconds: 5),
         );
@@ -348,7 +348,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
 
     setState(() => _isJoining = true);
     AppSnackbarService.instance.info(
-      message: 'Joining equb — confirm in MetaMask...',
+      message: 'Joining equb — confirm in wallet...',
       dedupeKey: 'pool_status_join_pending',
       duration: const Duration(seconds: 4),
     );
@@ -456,8 +456,7 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
       final round = pool['currentRound'] ?? 1;
       final poolSym = _tokenSymbolFor(context);
       final label = 'Contribute $poolSym (Round $round)';
-      const hint =
-          'Your wallet (MetaMask) will pop up to sign this transaction.';
+      const hint = 'Your wallet will open to sign this transaction.';
 
       // Collateral gate: check if user has locked enough collateral for this pool
       final collateral = context.watch<CollateralProvider>();
@@ -793,7 +792,8 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
     final wallet = context.watch<WalletService>();
     final walletProvider = context.watch<WalletProvider>();
     final pool = pools.selectedPool;
-    final embeddedDesktop = widget.embeddedDesktop && AppTheme.isDesktop(context);
+    final embeddedDesktop =
+        widget.embeddedDesktop && AppTheme.isDesktop(context);
 
     return Container(
       decoration: BoxDecoration(gradient: AppTheme.bgGradient(context)),
@@ -821,8 +821,10 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
                       }
                     },
                     itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'payouts', child: Text('Payout Stream')),
-                      PopupMenuItem(value: 'governance', child: Text('Governance')),
+                      PopupMenuItem(
+                          value: 'payouts', child: Text('Payout Stream')),
+                      PopupMenuItem(
+                          value: 'governance', child: Text('Governance')),
                       PopupMenuItem(value: 'rules', child: Text('Rules')),
                     ],
                   ),
@@ -906,29 +908,39 @@ class _PoolStatusScreenState extends State<PoolStatusScreen> {
                           children: [
                             DesktopSectionTitle(
                               title: pool['name']?.toString() ?? 'Equb Status',
-                              subtitle: 'Round status, members, payouts, and management all stay inside the desktop workspace.',
+                              subtitle:
+                                  'Round status, members, payouts, and management all stay inside the desktop workspace.',
                               trailing: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(
                                     onPressed: _loadPoolData,
-                                    icon: const Icon(Icons.refresh_rounded, size: 22),
+                                    icon: const Icon(Icons.refresh_rounded,
+                                        size: 22),
                                   ),
                                   PopupMenuButton<String>(
-                                    icon: const Icon(Icons.more_horiz_rounded, size: 22),
+                                    icon: const Icon(Icons.more_horiz_rounded,
+                                        size: 22),
                                     onSelected: (v) {
                                       if (v == 'payouts') _openPayoutStream();
                                       if (v == 'governance') {
-                                        context.push('/equb-governance/${widget.poolId}');
+                                        context.push(
+                                            '/equb-governance/${widget.poolId}');
                                       }
                                       if (v == 'rules') {
-                                        context.push('/equb-rules/${widget.poolId}');
+                                        context.push(
+                                            '/equb-rules/${widget.poolId}');
                                       }
                                     },
                                     itemBuilder: (_) => const [
-                                      PopupMenuItem(value: 'payouts', child: Text('Payout Stream')),
-                                      PopupMenuItem(value: 'governance', child: Text('Governance')),
-                                      PopupMenuItem(value: 'rules', child: Text('Rules')),
+                                      PopupMenuItem(
+                                          value: 'payouts',
+                                          child: Text('Payout Stream')),
+                                      PopupMenuItem(
+                                          value: 'governance',
+                                          child: Text('Governance')),
+                                      PopupMenuItem(
+                                          value: 'rules', child: Text('Rules')),
                                     ],
                                   ),
                                 ],

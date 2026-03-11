@@ -4,7 +4,7 @@ import 'dart:js_interop_unsafe';
 bool get hasInjectedProvider => globalContext.has('ethereum');
 
 /// Extract a human-readable message from a JS error object.
-/// MetaMask errors are typically `{ code: number, message: string, data?: { message } }`.
+/// Injected EVM wallet errors are typically `{ code: number, message: string, data?: { message } }`.
 String _extractJsErrorMessage(Object e) {
   try {
     if (e is JSObject) {
@@ -107,7 +107,8 @@ Future<void> switchInjectedChain({
         {'chainId': hexChainId}
       ],
     }.jsify();
-    final promise = ethereum.callMethod<JSPromise>('request'.toJS, switchParams);
+    final promise =
+        ethereum.callMethod<JSPromise>('request'.toJS, switchParams);
     await promise.toDart;
   } catch (e) {
     final message = _extractJsErrorMessage(e);
