@@ -3,7 +3,6 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
-import '../config/app_config.dart';
 import '../config/theme.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -269,7 +268,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             iconColor: AppTheme.primaryColor,
             title: 'Sign in or sign up next',
             subtitle:
-              'Email/password and Google sign-in come first. Wallet setup stays optional and can be added later from Profile.',
+                'Email/password and Google sign-in come first. Wallet setup stays optional and can be added later from Profile.',
             trailing: Icon(
               Icons.arrow_forward_ios_rounded,
               size: 16,
@@ -277,7 +276,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
             onTap: () async {
               await context.read<AuthProvider>().completeOnboarding();
-              if (!context.mounted) {
+              if (!mounted) {
                 return;
               }
               context.go('/auth');
